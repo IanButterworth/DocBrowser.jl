@@ -97,12 +97,14 @@ function install(repl = Base.active_repl)
         line = String(take!(copy(buf)))
         ok && is_docs_place(line) || return done(s, buf, ok)
         term = LineEdit.terminal(s)
+        name = nothing
         try
-            Base.invokelatest(browse, term; query=line, context=Base.active_module())
+            name = Base.invokelatest(browse, term; query=line, context=Base.active_module())
         catch err
             err isa InterruptException || @error "The documentation browser failed" exception=(err, catch_backtrace())
         end
         LineEdit.transition(s, julia_prompt)
+        name === nothing || (LineEdit.edit_insert(LineEdit.buffer(s), name); LineEdit.refresh_line(s))
         return nothing
     end
     INSTALLED[repl] = nothing

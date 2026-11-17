@@ -80,13 +80,16 @@ end
 # The download that a browser started, so that only one runs at a time.
 const MANUAL_DOWNLOAD = Ref{Union{Nothing,Task}}(nothing)
 
-# Start downloading the manual in the background, unless it is there or failed this session.
+# Start downloading the manual in the background, unless it is there or being downloaded.
+# A download that fails is tried again the next time the browser opens.
 function start_manual_download(on_done)
     MANUAL_DOWNLOAD[] === nothing || return nothing
     MANUAL_DOWNLOAD[] = @async try
         download_manual()
         Base.invokelatest(on_done)
-    catch
+    catch err
+        @debug "Downloading the manual failed" exception=(err, catch_backtrace())
+        MANUAL_DOWNLOAD[] = nothing
     end
     return nothing
 end
