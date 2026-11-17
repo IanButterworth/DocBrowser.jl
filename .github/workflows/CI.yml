@@ -29,11 +29,11 @@ jobs:
             os: ubuntu-latest
     continue-on-error: ${{ matrix.version == 'nightly' }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: julia-actions/setup-julia@v2
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
         with:
           version: ${{ matrix.version }}
-      - uses: julia-actions/cache@v2
+      - uses: julia-actions/cache@v3
       - uses: julia-actions/julia-buildpkg@v1
       - name: Test DocBrowser
         uses: julia-actions/julia-runtest@v1
