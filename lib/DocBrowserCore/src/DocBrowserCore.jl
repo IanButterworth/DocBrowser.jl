@@ -119,6 +119,9 @@ include("ui.jl")
 # type inference, which the JIT object cache does not keep. It costs about 11 MiB.
 include("precompile.jl")
 
-__init__() = foreach(addface!, FACES)
+function __init__()
+    foreach(addface!, FACES)
+    atexit(wait_for_download)
+end
 
 end

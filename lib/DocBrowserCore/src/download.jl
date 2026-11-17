@@ -93,3 +93,11 @@ function start_manual_download(on_done)
     end
     return nothing
 end
+
+# Julia can crash if it exits while a download is running, so a running one gets a few seconds
+# to finish first.
+function wait_for_download()
+    t = MANUAL_DOWNLOAD[]
+    t === nothing || istaskdone(t) || timedwait(() -> istaskdone(t), 5.0)
+    return nothing
+end

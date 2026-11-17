@@ -11,9 +11,11 @@ end
 
 @testset "the browser is loaded on first use" begin
     @test !haskey(Base.loaded_modules, CORE)
+    # Downloaded first, so that no download is still running when the tests end.
+    @test isdir(DocBrowser.download_manual())
+    @test haskey(Base.loaded_modules, CORE)
     # `y` closes the browser and returns the name that was shown.
     @test DocBrowser.browse(fake_terminal("y"); query="sum") == "sum"
-    @test haskey(Base.loaded_modules, CORE)
 end
 
 @testset "REPL help mode" begin
