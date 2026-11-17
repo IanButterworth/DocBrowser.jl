@@ -41,7 +41,7 @@ function write_pages_toml(io::IO, lists)
 end
 
 """
-    DocBrowser.download_manual(; force=false) -> String
+    DocBrowserCore.download_manual(; force=false) -> String
 
 Download the Markdown source of Julia's manual for this version of Julia, and return the
 directory it is kept in. The browser does this by itself the first time it opens.

@@ -10,12 +10,6 @@ function enter_input_mode(term)
     term isa REPL.Terminals.UnixTerminal && write(term.out_stream, "\e[?2004h")
     return nothing
 end
-function leave_input_mode(term)
-    isdefined(LineEdit, :leave_input_mode) && return LineEdit.leave_input_mode(term)
-    REPL.Terminals.raw!(term, false)
-    term isa REPL.Terminals.UnixTerminal && write(term.out_stream, "\e[?2004l")
-    return nothing
-end
 
 # Whether a line of help mode names a place in the docs, which the browser opens.
 is_docs_place(line::AbstractString) = occursin(r"^\s*(docs:|https?://(pkg)?docs\.julialang\.org/)", line)

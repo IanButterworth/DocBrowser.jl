@@ -8,7 +8,7 @@ updates:
       all-actions:
         patterns: ["*"]
   - package-ecosystem: "julia"
-    directory: "/"
+    directories: ["/", "/lib/DocBrowserCore"]
     schedule:
       interval: "monthly"
     groups:

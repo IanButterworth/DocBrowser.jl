@@ -19,7 +19,8 @@ Then load it in `~/.julia/config/startup.jl`, so that help mode opens the browse
 using DocBrowser
 ```
 
-Loading takes about 0.15 s. Julia 1.12 and later are supported.
+Loading it takes about 2 ms: it only sets up help mode, and the browser itself is loaded the
+first time you open it. Julia 1.12 and later are supported.
 
 ## Using it
 
@@ -86,6 +87,15 @@ Julia has no hook for this, so on loading, the package changes the running REPL'
 it binds Enter and Alt-Enter, and handles pasted `help?> docs: ...` lines. It also binds `?` at
 the `julia>` prompt, to show a hint on the empty `help?>` prompt. Your own key bindings for
 those keys are kept underneath and still run for everything else.
+
+## Packages
+
+This repository holds two packages:
+
+- **DocBrowser**, at the top: the package to install. It sets up help mode and loads
+  DocBrowserCore when the browser is first opened.
+- **DocBrowserCore**, in [`lib/DocBrowserCore`](lib/DocBrowserCore): the browser itself.
+  `DocBrowserCore.browse()` opens it without the help mode set-up.
 
 ## Origin
 
