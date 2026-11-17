@@ -1,0 +1,420 @@
+# Tips for the start page of the documentation browser, one shown at a time in a random order.
+#
+# `text` is plain text with code in backticks. Its lines are joined into one paragraph, and a
+# backslash is written twice. `docs`, `page` and `heading` link it to where the docs say more:
+# `docs` is a standard library, or "manual" for Julia's manual, `page` a Markdown file of it,
+# and `heading` the text or `@id` of a heading there. `os` limits a tip to some systems: "bsd"
+# (macOS and FreeBSD), "linux" or "windows". `julia` is the first version of Julia with what the
+# tip describes, for a tip that older versions would get wrong.
+
+[[tip]]
+text = """
+Made a change in `pkg>` you didn't mean? `undo` takes back the last change to the project, and
+`redo` puts it back.
+"""
+
+[[tip]]
+text = """
+`pkg> activate --temp` starts an empty environment that is deleted when Julia exits: a place to
+try a package without adding it to your project.
+"""
+docs = "Pkg"
+page = "environments.md"
+heading = "Temporary environments"
+
+[[tip]]
+text = """
+`pkg> why Foo` shows which of your packages bring in `Foo`.
+"""
+docs = "Pkg"
+page = "managing-packages.md"
+heading = "Why is a package not at its latest version?"
+
+[[tip]]
+text = """
+`pkg> status --outdated` shows which packages have newer versions, and what holds each one back.
+"""
+docs = "Pkg"
+page = "managing-packages.md"
+heading = "Why is a package not at its latest version?"
+
+[[tip]]
+text = """
+A string in help mode searches the text of every docstring: try `help?> "sort by"`.
+"""
+docs = "REPL"
+page = "index.md"
+heading = "Help mode"
+
+[[tip]]
+text = """
+You can paste a whole REPL session, `julia>` prompts and output included: the REPL runs only the
+code.
+"""
+docs = "REPL"
+page = "index.md"
+heading = "The Julian mode"
+
+[[tip]]
+text = """
+`^R` searches everything you have typed at the REPL before, in this session and earlier ones.
+"""
+docs = "REPL"
+page = "index.md"
+heading = "History searching"
+
+[[tip]]
+text = """
+Type `\\alpha` and press Tab to get `α`. To find out how to type a character you see, ask help
+mode: `help?> α`.
+"""
+docs = "REPL"
+page = "index.md"
+heading = "Tab completion"
+
+[[tip]]
+text = """
+`@edit sum([1, 2])` opens the method that this call runs in your editor, and `@which` says where
+it is. Set `JULIA_EDITOR` to choose the editor.
+"""
+
+[[tip]]
+text = """
+`julia --project` with no directory uses the project of the current directory, or of the nearest
+folder above it with a `Project.toml`.
+"""
+docs = "manual"
+page = "command-line-interface.md"
+heading = "command-line-interface"
+
+[[tip]]
+text = """
+Alt-Enter starts a new line at the `julia>` prompt without running what you have typed so far.
+On a Mac, press Esc and then Enter.
+"""
+docs = "REPL"
+page = "index.md"
+heading = "Key bindings"
+
+[[tip]]
+text = """
+After an error, type the number of a frame in the stacktrace and press `^Q` to open your editor
+at that line. The error itself is in `err`.
+"""
+docs = "REPL"
+page = "index.md"
+heading = "Key bindings"
+
+[[tip]]
+text = """
+Type the start of an earlier line and press Up: the REPL steps back through only the lines that
+begin that way.
+"""
+docs = "REPL"
+page = "index.md"
+heading = "Key bindings"
+
+[[tip]]
+text = """
+In `^R` history search, Tab selects lines and `^S` saves them to the clipboard or a file: a
+quick way to turn what you tried into a script.
+"""
+docs = "REPL"
+page = "index.md"
+heading = "History searching"
+julia = "1.13"
+
+[[tip]]
+text = """
+Have a value and wonder what you can do with it? Type `?(object)` and press Tab, with one of
+your own variables in place of `object`, to list the methods that take it. `Base.?(object)`
+lists only those in `Base`.
+"""
+docs = "REPL"
+page = "index.md"
+heading = "Tab completion"
+
+[[tip]]
+text = """
+`pkg> ?` lists every command of Pkg mode, and `pkg> ?add` explains one of them.
+"""
+docs = "Pkg"
+page = "getting-started.md"
+heading = "Asking for Help"
+
+[[tip]]
+text = """
+The REPL keeps the value of the last thing you ran in `ans`, so you can carry on with a result
+you forgot to save, and the last error in `err`, with its stacktrace, so you can look at it
+again.
+"""
+docs = "REPL"
+page = "index.md"
+heading = "The Julian mode"
+
+[[tip]]
+text = """
+Just installed a new version of Julia? `pkg> add --from @v1.14` adds every package of your old
+default environment to the new one.
+"""
+docs = "Pkg"
+page = "environments.md"
+heading = "Copying the dependencies of another environment"
+julia = "1.14"
+
+[[tip]]
+text = """
+Press Alt-e (Esc and then e on a Mac) to open what you have typed at the prompt in your editor.
+When you save and close it, the edited code comes back to the prompt.
+"""
+docs = "REPL"
+page = "index.md"
+heading = "Key bindings"
+
+[[tip]]
+text = """
+`@time_imports using Foo` shows how long `Foo` and each of its dependencies takes to load, and
+how much of that is compiling.
+"""
+docs = "manual"
+page = "performance-tips.md"
+heading = "Reducing package loading time"
+
+[[tip]]
+text = """
+Tasks from earlier inputs still printing after the prompt came back? Press `^C` twice at an
+empty `julia>` prompt to cancel all of them.
+"""
+julia = "1.14"
+
+[[tip]]
+text = """
+Type `using Foo` for a package you have not installed, and the REPL offers to add it for you.
+"""
+
+[[tip]]
+text = """
+Keep an environment by name: `julia --project=@myenv` uses `~/.julia/environments/myenv` from any
+folder, and `pkg> activate --shared myenv` switches to it.
+"""
+docs = "Pkg"
+page = "environments.md"
+heading = "Shared environments"
+
+[[tip]]
+text = """
+Working on a project with more than one version of Julia? Rename its `Manifest.toml` to
+`Manifest-v1.12.toml`, and Julia 1.12 uses that one while other versions keep their own.
+Pkg keeps it up to date from then on.
+"""
+docs = "Pkg"
+page = "toml-files.md"
+heading = "Different Manifests for Different Julia versions"
+
+[[tip]]
+text = """
+To lock an environment you rely on, put `readonly = true` in its `Project.toml`. Pkg then
+refuses to add, remove or update anything in it, until `Pkg.readonly(false)` unlocks it.
+"""
+docs = "Pkg"
+page = "toml-files.md"
+heading = "The-readonly-field"
+julia = "1.13"
+
+[[tip]]
+text = """
+Some packages come with command-line apps. `pkg> app add Foo` installs those of `Foo`, so you
+can run them from your terminal, with `~/.julia/bin` on your `PATH`.
+"""
+docs = "Pkg"
+page = "apps.md"
+heading = "Installing Julia apps"
+julia = "1.12"
+
+[[tip]]
+text = """
+Want to try a fix before it is released? `pkg> add https://github.com/Org/Foo.jl/pull/12` adds
+a package as it is in that pull request. A link to a branch or a commit works too.
+"""
+docs = "Pkg"
+page = "managing-packages.md"
+heading = "Adding unregistered packages"
+julia = "1.13"
+
+[[tip]]
+text = """
+`pkg> add --preserve=installed Foo` keeps your other packages as they are and uses only versions
+you already have installed, so nothing new has to be downloaded.
+"""
+
+[[tip]]
+text = """
+`pkg> compat --current` fills in the missing `[compat]` entries of your project with the
+versions you have now.
+"""
+julia = "1.13"
+
+[[tip]]
+text = """
+Type a module's name and press Alt-m (Esc and then m on a Mac), and what you type next runs
+inside that module. Alt-m at an empty prompt switches back.
+"""
+docs = "REPL"
+page = "index.md"
+heading = "Changing the contextual module which is active at the REPL"
+
+[[tip]]
+text = """
+`help?> ??foo` shows all of a docstring, including the extended help that `?foo` leaves out.
+"""
+docs = "REPL"
+page = "index.md"
+heading = "Help mode"
+
+[[tip]]
+text = """
+Shell mode runs commands without a system shell: `shell> ls $dir` puts in the value of the Julia
+variable `dir`, and `cd` changes Julia's own working directory.
+"""
+docs = "REPL"
+page = "index.md"
+heading = "Shell mode"
+
+[[tip]]
+text = """
+Precompiling is taking a while? Press `d` to get the prompt back while it carries on in the
+background, and `pkg> precompile --monitor` to watch it again.
+"""
+docs = "Pkg"
+page = "environments.md"
+heading = "Keyboard Controls and Background Precompilation"
+julia = "1.14"
+
+[[tip]]
+text = """
+`ENV["JULIA_DEBUG"] = "Foo"` shows the `@debug` messages of module `Foo`.
+"""
+docs = "Logging"
+page = "index.md"
+heading = "Environment variables"
+
+[[tip]]
+text = """
+The first `@time` of a call includes compiling it, and says how much of the time that was. Run
+it again to time the call alone.
+"""
+docs = "manual"
+page = "performance-tips.md"
+heading = "Measure performance with @time and pay attention to memory allocation"
+
+[[tip]]
+text = """
+`@code_warntype f(x)` marks in red the values whose type Julia can't work out before running, a
+common cause of slow code.
+"""
+docs = "manual"
+page = "performance-tips.md"
+heading = "man-code-warntype"
+
+[[tip]]
+text = """
+A function that uses a global variable is slow, since the variable could change type at any
+time. Pass it in as an argument, declare it `const`, or give it a type: `x::Float64 = 0.0`.
+"""
+docs = "manual"
+page = "performance-tips.md"
+heading = "Avoid untyped global variables"
+
+[[tip]]
+text = """
+Slicing copies: `A[:, 1]` is a new array. `@views` in front of an expression makes its slices
+views into `A` instead.
+"""
+docs = "manual"
+page = "performance-tips.md"
+heading = "man-performance-views"
+
+[[tip]]
+text = """
+Arrays are stored column by column, so a loop over a matrix runs fastest with the first index in
+the innermost loop.
+"""
+docs = "manual"
+page = "performance-tips.md"
+heading = "man-performance-column-major"
+
+[[tip]]
+text = """
+After `using Profile`, `@profile f(x)` records where the time goes, and
+`Profile.print(format=:flat)` lists how much of it each line took.
+"""
+docs = "Profile"
+page = "index.md"
+heading = "Via @profile"
+
+[[tip]]
+text = """
+With Revise.jl loaded, changes you save to your code take effect in the running session, without
+a restart. Put `using Revise` in `~/.julia/config/startup.jl` to always have it.
+"""
+docs = "manual"
+page = "workflow-tips.md"
+heading = "Revise-based workflows"
+
+[[tip]]
+text = """
+Define `function (@main)(args)` in a script, and `julia script.jl a b` calls it with `["a",
+"b"]`. `julia -m Foo` runs the `@main` of package `Foo`.
+"""
+docs = "manual"
+page = "command-line-interface.md"
+heading = "The Main.main entry point"
+julia = "1.12"
+
+[[tip]]
+text = """
+Your code runs on one thread unless you start Julia with `-t auto`, which gives it one per core.
+`Threads.@spawn` runs work on them.
+"""
+docs = "manual"
+page = "multi-threading.md"
+heading = "Starting Julia with multiple threads"
+
+[[tip]]
+text = """
+`varinfo()` lists your global variables and their sizes: a quick way to see what holds on to
+memory.
+"""
+
+[[tip]]
+text = """
+`methodswith(Dict)` lists the functions with a method for `Dict`, and `supertypes(Int)` shows
+where a type sits among the others.
+"""
+
+[[tip]]
+text = """
+To show someone a page of the docs, press `c` in the docs browser to copy a link to it, like
+`help?> docs: manual/performance-tips`. Pasted at the `julia>` prompt, it opens the browser
+there. The address of a page of the online docs works too: `help?> https://docs.julialang.org/...`
+"""
+
+[[tip]]
+text = """
+Wondering what a long-running command is doing? Press `^T` while it runs to see where it is, and
+a profile of the next second.
+"""
+docs = "Profile"
+page = "index.md"
+heading = "Triggered During Execution"
+os = ["bsd"]
+
+[[tip]]
+text = """
+Wondering what a long-running command is doing? Run `kill -USR1 <pid>` from another terminal to
+see where it is, and a profile of the next second.
+"""
+docs = "Profile"
+page = "index.md"
+heading = "Triggered During Execution"
+os = ["linux"]
