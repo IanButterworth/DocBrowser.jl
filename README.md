@@ -28,13 +28,14 @@ first time you open it. Julia 1.12 and later are supported.
 
 The browser has three panes:
 
-- **Contents:** *Julia*, with its manual (*Manual*, *Base*, *Standard library*, *Developer docs*)
-  and its own modules, then the loaded *Packages*, the active project's dependencies first, and
-  then `Main`, where your own definitions are. Dependencies that are not loaded yet are listed
+- **Contents:** *Julia*, with its manual (*Manual*, *Base*, *Standard library*, *Developer docs*),
+  then the loaded *Packages*, the active project's dependencies first, and then `Main`, where
+  your own definitions are. Each library is one row: `Core` and `Base` are in *Base*, and the
+  standard libraries in *Standard library*. Dependencies that are not loaded yet are listed
   too: select one and press Enter to load it.
 - **Names:** the sections of a manual page, or the names in a module, grouped by kind. Each is
   marked `●` if exported, `○` if public, or `·` if internal. Press `i` to show internal and
-  deprecated names. A package's own manual, if its source has one, is listed first.
+  deprecated names. A library's manual, if its source has one, is listed first.
 - **Documentation:** the docstrings of a name, or a module's docstring or README, with its
   version, licence, repository and online docs. Functions list their methods, and types their
   fields, subtypes and constructors.

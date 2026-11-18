@@ -1009,19 +1009,19 @@ end
 const SECTION_TITLES = (docs = "Julia", code = "Packages", project = "Project",
                         direct = "Dependencies", julia = "Core and Base", manual = "Manual",
                         basedocs = "Base", stdlibdocs = "Standard library",
-                        indirect = "Indirect dependencies and standard libraries",
+                        indirect = "Indirect dependencies",
                         extension = "Extensions", devdocs = "Developer documentation")
 
 const SECTION_BLURBS = (
     project = "The package of the active project.",
     direct = "Packages that the active project depends on, and packages loaded into `Main` with `using` or `import`.",
     julia = "The docstrings of `Core` and `Base`, which are always loaded.",
-    indirect = "Packages that were loaded because one of your packages needs them, or that Julia loaded for itself, such as the standard libraries that the REPL uses.",
+    indirect = "Packages that were loaded because one of your packages needs them, or that Julia loaded for itself. Standard libraries with a manual are in Julia's Standard library instead.",
     extension = "Package extensions: code that a package loads once some other package is loaded too.",
-    docs = "Julia's manual, written as a guide: how the language works, the functions of `Base` by topic, the standard libraries, and how Julia works inside. Then the docstrings of `Core` and `Base`, name by name.",
+    docs = "Julia's manual, written as a guide: how the language works, the functions of `Base` by topic, the standard libraries, and how Julia works inside.",
     code = "The packages that are loaded now: their manuals, where their source has one, and their docstrings, name by name.",
     manual = "The Julia manual: how the language works and how to use it.",
-    basedocs = "The functions, types and macros of `Base`, grouped by topic.",
+    basedocs = "The functions, types and macros of `Base`, grouped by topic, and the docstrings of `Core` and `Base`, name by name.",
     stdlibdocs = "The manual pages of the standard libraries. A page lists the names of its library, which become links once the library is loaded.",
     devdocs = "How Julia works inside, and how to build it and contribute to it.",
 )
@@ -1045,11 +1045,11 @@ function section_page(cat::Catalog, role::Symbol, width::Int)
         proj = Base.active_project()
         proj === nothing || addline!(pb, "  ", ("Active project: " * Base.contractuser(proj), :REPL_DocBrowser_dim))
     end
-    pkgs = PkgEntry[p for p in cat.pkgs if p.role === role]
+    pkgs = PkgEntry[p for p in cat.pkgs if p.role === (role === :basedocs ? :julia : role)]
     addline!(pb)
     if role === :docs || role === :code
         for r in getfield(BLOCKS, role)
-            n = count(p -> p.role === r, cat.pkgs) + count(p -> p.role === r, cat.manual)
+            n = count(p -> package_section(p) === r, cat.pkgs) + count(p -> p.role === r, cat.manual)
             n == 0 && continue
             addline!(pb, "    ", (getfield(SECTION_TITLES, r), nothing, SectionTarget(r)), ("  $n", :REPL_DocBrowser_dim))
         end

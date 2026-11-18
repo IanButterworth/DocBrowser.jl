@@ -164,7 +164,7 @@ function add_manual_page!(pages::Vector{ManualPage}, path::String, role::Symbol,
         isempty(headings) ? splitext(basename(path))[1] : headings[1].text
     end
     # Pkg numbers its chapters, which would skip the pages its build makes.
-    role === :pkgdocs && (title = replace(title, r"^(\*\*)?\d+\.(\*\*)?\s+" => ""))
+    role in (:pkgdocs, :package) && (title = replace(title, r"^(\*\*)?\d+\.(\*\*)?\s+" => ""))
     push!(pages, ManualPage(path, title, role, group))
 end
 

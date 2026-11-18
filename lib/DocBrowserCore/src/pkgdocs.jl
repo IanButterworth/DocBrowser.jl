@@ -26,7 +26,6 @@ function package_docs(cat::Catalog, m::Module)
     (p === nothing || p.role in (:extension, :julia, :main) || parentmodule(m) !== m) && return NO_DOCS
     dir = pkgdir(m)
     dir === nothing && return NO_DOCS
-    in_stdlib_dir(dir) && return NO_DOCS # the standard libraries are in the manual
     return get!(() -> package_docs(dir), cat.pkgdocs, dir)
 end
 

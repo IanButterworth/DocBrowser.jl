@@ -868,6 +868,32 @@ end
     end
 end
 
+@testset "the sidebar: a row per library" begin
+    b = Browser(fake_terminal(""))
+    union!(b.expanded, (:basedocs, :stdlibdocs, :indirect))
+    DocBrowserCore.refresh_side!(b)
+    rows = b.side_rows
+    lib(r) = r.pkg === nothing ? nothing : r.pkg.mod
+    # Core and Base are in Base, and Main is last, on its own.
+    @test [lib(r) for r in rows if r.role === :basedocs && r.pkg !== nothing] == [Base, Core]
+    @test lib(rows[end]) === Main && rows[end].role === :main
+    # A loaded standard library is one row of Standard library, and not an indirect dependency.
+    i = findfirst(r -> lib(r) === Markdown, rows)
+    @test rows[i].role === :stdlibdocs
+    @test !any(r -> r.role === :indirect && lib(r) === Markdown, rows)
+    @test !any(r -> r.page !== nothing && r.page.title == "Markdown", rows)
+    # Its names pane lists its manual, then its names.
+    b.side.cursor = i
+    DocBrowserCore.sync_side!(b)
+    @test b.mod === Markdown && b.name_rows[2].group === :manual
+    @test any(r -> r.kind === :entry, b.name_rows)
+    # Opening its manual page picks the page among them.
+    page = DocBrowserCore.stdlib_page("Markdown")
+    DocBrowserCore.open_manual!(b, page, 0)
+    @test DocBrowserCore.side_row(b).pkg.mod === Markdown
+    @test DocBrowserCore.current_key(b) == DocBrowserCore.ManualTarget(normpath(page), "")
+end
+
 @testset "the headings of a page line up with what it shows" begin
     mktempdir() do dir
         path = joinpath(dir, "page.md")
@@ -949,7 +975,8 @@ end
     # lists its pages, the one opened unfolded to its headings.
     rows = b.side_rows
     i = b.side.cursor
-    @test rows[i].role === :pkgdocs && rows[i-1].page.role === :stdlibdocs && lowercase(rows[i-1].page.title) < "pkg"
+    prev = rows[i-1].page === nothing ? rows[i-1].pkg.id.name : rows[i-1].page.title # a loaded library is a package row
+    @test rows[i].role === :pkgdocs && rows[i-1].role === :stdlibdocs && lowercase(prev) < "pkg"
     screen = plain(frame(b))
     @test any(l -> startswith(l, "   Pkg "), screen) && any(l -> occursin("│ Pkg  $(length(DocBrowserCore.pkg_pages(b))) pages", l), screen)
     pages = DocBrowserCore.pkg_pages(b)
@@ -1372,8 +1399,8 @@ end
     @test EDITED[end] == (@__FILE__, 3)
     DocBrowserCore.follow!(b, DocBrowserCore.SourceTarget("/no/such/file.jl", 1))
     @test occursin("not found", b.status)
-    DocBrowserCore.follow!(b, DocBrowserCore.SectionTarget(:julia))
-    @test b.focus === :side && DocBrowserCore.current_key(b) == DocBrowserCore.SectionTarget(:julia)
+    DocBrowserCore.follow!(b, DocBrowserCore.SectionTarget(:basedocs))
+    @test b.focus === :side && DocBrowserCore.current_key(b) == DocBrowserCore.SectionTarget(:basedocs)
     DocBrowserCore.follow!(b, NameTarget(Fixture, :Inner))
     @test b.mod === Fixture.Inner
     DocBrowserCore.follow!(b, NameTarget(Fixture, :helper))

@@ -127,15 +127,16 @@ end
 
 # The sidebar has two blocks: Julia, with its manual and its own modules, and the loaded
 # packages. `Main` is a row of its own after them. Indirect dependencies are a section inside
-# the dependencies.
-const BLOCKS = (docs = (:manual, :basedocs, :stdlibdocs, :devdocs, :julia),
+# the dependencies. A library is one row, which shows its manual and its names: `Core` and
+# `Base` are in Base, and the standard libraries in Standard library once they are loaded.
+const BLOCKS = (docs = (:manual, :basedocs, :stdlibdocs, :devdocs),
                 code = (:project, :direct, :indirect, :extension))
 const SECTION_ORDER = (:docs, BLOCKS.docs..., :code, BLOCKS.code...)
-const MANUAL_ROLES = (:manual, :basedocs, :stdlibdocs, :devdocs)
-const DEFAULT_EXPANDED = (:docs, :code, :project, :direct, :julia)
+const MANUAL_ROLES = BLOCKS.docs
+const DEFAULT_EXPANDED = (:docs, :code, :project, :direct)
 const SIDEBAR_TITLES = (docs = "Julia", code = "Packages", manual = "Manual", basedocs = "Base",
                         stdlibdocs = "Standard library", pkgdocs = "Pkg", devdocs = "Developer docs", project = "Project",
-                        direct = "Dependencies", indirect = "Indirect & stdlib", julia = "Core and Base",
+                        direct = "Dependencies", indirect = "Indirect", julia = "Core and Base",
                         extension = "Extensions")
 
 is_block(role::Symbol) = role === :docs || role === :code
@@ -146,9 +147,60 @@ pkg_pages(b::Browser) = filter(p -> p.role === :pkgdocs, b.cat.manual)
 
 function has_section(b::Browser, role::Symbol)
     role === :manual && manual_status() !== :none && return true
-    role in MANUAL_ROLES && return any(p -> p.role === role, b.cat.manual)
-    role === :direct && !isempty(b.cat.unloaded) && return true
-    return any(p -> p.role === role, b.cat.pkgs)
+    return !isempty(section_rows(b, role))
+end
+
+# The loaded standard library that a page of the standard library's manual is for.
+function stdlib_package(b::Browser, page::ManualPage)
+    page.role in (:stdlibdocs, :pkgdocs) || return nothing
+    name = page.role === :pkgdocs ? "Pkg" : basename(dirname(dirname(dirname(page.path))))
+    i = findfirst(p -> p.id.name == name && p.role !== :extension && Base.is_stdlib(p.id), b.cat.pkgs)
+    return i === nothing ? nothing : b.cat.pkgs[i]
+end
+
+# The section whose row for package `p` it is picked by.
+function package_section(p::PkgEntry)
+    p.role === :julia && return :basedocs
+    p.role === :indirect && Base.is_stdlib(p.id) &&
+        (p.id.name == "Pkg" || stdlib_page(p.id.name) !== nothing) && return :stdlibdocs
+    return p.role
+end
+
+# The rows of section `role`, when it is unfolded.
+function section_rows(b::Browser, role::Symbol)
+    rows = SideRow[]
+    if role === :basedocs
+        for p in b.cat.pkgs
+            p.role === :julia && push!(rows, SideRow(role, p))
+        end
+    end
+    if role in MANUAL_ROLES
+        pages = filter(p -> p.role === role, b.cat.manual)
+        # Pkg's manual is among the standard libraries, in its place.
+        pkg = role === :stdlibdocs ? pkg_pages(b) : ManualPage[]
+        if !isempty(pkg)
+            k = something(findfirst(p -> lowercase(p.title) > "pkg", pages), length(pages) + 1)
+            insert!(pages, k, pkg[1])
+        end
+        for p in pages
+            lib = stdlib_package(b, p)
+            if lib === nothing
+                push!(rows, SideRow(p.role, nothing, nothing, p))
+            elseif !any(r -> r.pkg === lib, rows) # a library with two pages is one row
+                push!(rows, SideRow(role, lib))
+            end
+        end
+        return rows
+    end
+    for p in b.cat.pkgs
+        p.role === role && package_section(p) === role && push!(rows, SideRow(role, p))
+    end
+    if role === :direct
+        for id in b.cat.unloaded
+            push!(rows, SideRow(role, nothing, id))
+        end
+    end
+    return rows
 end
 
 function refresh_side!(b::Browser)
@@ -163,28 +215,7 @@ function refresh_side!(b::Browser)
             # Indirect dependencies are inside the dependencies, when there are any.
             role === :indirect && has_section(b, :direct) && !(:direct in b.expanded) && continue
             push!(rows, SideRow(role, nothing))
-            role in b.expanded || continue
-            if role in MANUAL_ROLES
-                pages = filter(p -> p.role === role, b.cat.manual)
-                # Pkg's manual is among the standard libraries, in its place.
-                pkg = role === :stdlibdocs ? pkg_pages(b) : ManualPage[]
-                if !isempty(pkg)
-                    k = something(findfirst(p -> lowercase(p.title) > "pkg", pages), length(pages) + 1)
-                    insert!(pages, k, pkg[1])
-                end
-                for p in pages
-                    push!(rows, SideRow(p.role, nothing, nothing, p))
-                end
-                continue
-            end
-            for p in b.cat.pkgs
-                p.role === role && push!(rows, SideRow(role, p))
-            end
-            if role === :direct
-                for id in b.cat.unloaded
-                    push!(rows, SideRow(role, nothing, id))
-                end
-            end
+            role in b.expanded && append!(rows, section_rows(b, role))
         end
     end
     for p in b.cat.pkgs
@@ -333,8 +364,9 @@ end
 function select_package!(b::Browser, m::Module)
     p = package_of(b.cat, m)
     p === nothing && return
-    unfold_to!(b, p.role; open=true)
-    i = findfirst(r -> r.pkg !== nothing && r.pkg.mod === p.mod, b.side_rows)
+    section = package_section(p)
+    unfold_to!(b, section; open=true)
+    i = findfirst(r -> r.pkg !== nothing && r.pkg.mod === p.mod && r.role === section, b.side_rows)
     i === nothing && return
     b.side.cursor = i
     reveal!(b.side, content_rows(b))
@@ -1171,8 +1203,7 @@ function list_line(b::Browser, pane::Symbol, i::Int, x::Int, w::Int, row::Int)
                 put_seg!(rb, chevron, :REPL_DocBrowser_dim, action)
                 put_seg!(rb, getfield(SIDEBAR_TITLES, role), :REPL_DocBrowser_pane_title, action)
             else
-                n = count(p -> p.role === role, b.cat.pkgs) + (role === :direct ? length(b.cat.unloaded) : 0) +
-                    count(p -> p.role === role, b.cat.manual) + (role === :stdlibdocs && !isempty(pkg_pages(b)))
+                n = length(section_rows(b, role))
                 put_seg!(rb, role === :indirect && has_section(b, :direct) ? "   " : " ")
                 put_seg!(rb, chevron, :REPL_DocBrowser_dim, action)
                 put_seg!(rb, getfield(SIDEBAR_TITLES, role), :REPL_DocBrowser_section, action)
@@ -1183,7 +1214,7 @@ function list_line(b::Browser, pane::Symbol, i::Int, x::Int, w::Int, row::Int)
         else
             p = r.pkg
             version = p.version === nothing || p.role === :julia ? "" : string(p.version)
-            put_seg!(rb, p.role === :main ? "  " : p.role === :indirect && has_section(b, :direct) ? "     " : "   ")
+            put_seg!(rb, r.role === :main ? "  " : r.role === :indirect && has_section(b, :direct) ? "     " : "   ")
             put_seg!(rb, p.id.name, isjll(p.id.name) ? :REPL_DocBrowser_dim : nothing, action)
             room = w - width(rb) - 1
             if !isempty(version) && textwidth(version) + 1 <= room
@@ -1962,14 +1993,20 @@ function open_manual!(b::Browser, path::String, k::Int)
         i === nothing && (b.override = ManualTarget(path, ""))
         i === nothing && return
         p = b.cat.manual[i]
-        pkg = p.role === :pkgdocs
-        unfold_to!(b, pkg ? :stdlibdocs : p.role; open=true)
-        j = findfirst(r -> pkg ? r.role === :pkgdocs : r.page == p, b.side_rows)
+        # The page of a loaded standard library is one of the pages its row lists.
+        lib = stdlib_package(b, p)
+        pkg = p.role === :pkgdocs && lib === nothing
+        unfold_to!(b, p.role === :pkgdocs ? :stdlibdocs : p.role; open=true)
+        j = findfirst(r -> lib !== nothing ? r.pkg === lib && r.role === :stdlibdocs :
+                           pkg ? r.role === :pkgdocs : r.page == p, b.side_rows)
         j === nothing || (b.side.cursor = j)
         reveal!(b.side, content_rows(b))
         b.source = :side
         sync_side!(b)
-        if pkg
+        if lib !== nothing
+            n = findfirst(r -> r.kind === :pkgpage && r.hit.path == path, b.name_rows)
+            n === nothing || (b.names.cursor = n; b.source = :names)
+        elseif pkg
             # Unfold the page in the names pane and pick it, so that it is the page shown.
             push!(b.expanded, Symbol(path))
             refresh_names!(b)
