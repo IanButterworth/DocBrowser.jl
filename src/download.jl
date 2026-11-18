@@ -3,6 +3,11 @@
 
 const JULIA_RAW = "https://raw.githubusercontent.com/JuliaLang/julia"
 
+# Loaded only when the manual is downloaded, since it brings in libcurl and OpenSSL.
+const DOWNLOADS = PkgId(UUID("f43a241f-c20a-4ad4-852c-f6b1247861c6"), "Downloads")
+download_url(url, out) = Base.invokelatest(Base.require_stdlib(DOWNLOADS).download, url, out)
+is_not_found(err) = err isa Base.require_stdlib(DOWNLOADS).RequestError && err.response.status == 404
+
 julia_ref() = (c = Base.GIT_VERSION_INFO.commit; isempty(c) ? "v$VERSION" : c)
 
 # Where to look for the manual, nearest first. A local build or a fork can be at a commit
@@ -20,9 +25,9 @@ end
 function find_manual_ref(refs)
     for ref in refs
         try
-            return ref, String(take!(Downloads.download("$JULIA_RAW/$ref/doc/make.jl", IOBuffer())))
+            return ref, String(take!(download_url("$JULIA_RAW/$ref/doc/make.jl", IOBuffer())))
         catch err
-            err isa Downloads.RequestError && err.response.status == 404 || rethrow()
+            is_not_found(err) || rethrow()
         end
     end
     error("Julia's manual was not found at any of $(join(refs, ", "))")
@@ -70,7 +75,7 @@ function write_pages_toml(io::IO, lists)
 end
 
 """
-    DocBrowserCore.download_manual(; force=false) -> String
+    DocBrowser.download_manual(; force=false) -> String
 
 Download the Markdown source of Julia's manual for this version of Julia, and return the
 directory it is kept in. If the commit Julia was built from is not on GitHub, the nearest
@@ -81,7 +86,7 @@ function download_manual(; force::Bool=false)
     isfile(joinpath(dir, "pages.toml")) && !force && return dir
     ref, make = find_manual_ref(manual_refs())
     base = "$JULIA_RAW/$ref"
-    fetch(rel) = String(take!(Downloads.download("$base/$rel", IOBuffer())))
+    fetch(rel) = String(take!(download_url("$base/$rel", IOBuffer())))
     lists = make_page_lists(make)
     rels = [lists["manual"]; lists["base"]; (p for g in lists["devdocs"] for p in g["pages"])...]
     tmp = mktempdir(mkpath(dirname(dir)))
@@ -91,7 +96,7 @@ function download_manual(; force::Bool=false)
             mkpath(dirname(path))
             # a page that is missing is left out, as when it is not installed
             try
-                Downloads.download("$base/doc/src/$rel", path)
+                download_url("$base/doc/src/$rel", path)
             catch
                 rm(path; force=true)
             end

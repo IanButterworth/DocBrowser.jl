@@ -1,5 +1,6 @@
-# Opening the browser from the REPL's help mode. Julia has no hook for this, so the help mode's
-# key bindings and its handler for finished lines are changed once the REPL is set up.
+# Opening the browser from the REPL's help mode, for a REPL that does not do it by itself.
+# There is no hook for this, so the help mode's key bindings and its handler for finished lines
+# are changed once the REPL is set up.
 
 const LineEdit = REPL.LineEdit
 

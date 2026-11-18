@@ -18,8 +18,8 @@ Then load it in `~/.julia/config/startup.jl`, so that help mode opens the browse
 using DocBrowser
 ```
 
-Loading it takes about 2 ms: it only sets up help mode, and the browser itself is loaded the
-first time you open it. Julia 1.12 and later are supported.
+Loading it takes about 30 ms, almost all of it the precompiled code that makes the browser open
+at once. It reads the docs only when the browser opens. Julia 1.12 and later are supported.
 
 ## Using it
 
@@ -95,25 +95,19 @@ When some are missing, the package's pages say so and link to its online docs.
 
 ## How it hooks into the REPL
 
-Julia has no hook for this, so on loading, the package changes the running REPL's help mode:
+Julia has no hook for this yet, so on loading, the package changes the running REPL's help mode:
 it binds Enter and Alt-Enter, and handles pasted `help?> docs: ...` lines. It also binds `?` at
 the `julia>` prompt, to show a hint on the empty `help?>` prompt. Your own key bindings for
 those keys are kept underneath and still run for everything else.
 
-## Repository layout
+## As a standard library
 
-This repository holds two packages:
+[JuliaLang/julia#64993](https://github.com/JuliaLang/julia/pull/64993) proposes shipping this
+package with Julia as a standard library. In a Julia that does, help mode opens the browser
+itself, with nothing to install or load at startup, the manual is installed with Julia, and the
+browser is loaded the first time it opens. Loading the package there changes nothing.
 
-- **DocBrowser**, at the top: the package to install. It sets up help mode and loads
-  DocBrowserCore when the browser is first opened.
-- **DocBrowserCore**, in [`lib/DocBrowserCore`](lib/DocBrowserCore): the browser itself.
-  `DocBrowserCore.browse()` opens it without the help mode set-up.
-
-## Compared with a standard library
-
-This started as a pull request to add the browser to Julia as a standard library,
-[JuliaLang/julia#64993](https://github.com/JuliaLang/julia/pull/64993), which was not merged.
-As a package it does almost everything that would have, but:
+On other versions of Julia, as a package, it does almost everything that would, but:
 
 - it has to be installed, and loaded from `startup.jl`;
 - Julia's manual is downloaded on first use, rather than shipped with Julia, so it is not there

@@ -84,4 +84,13 @@ function precompile_workload()
     nothing
 end
 
-@compile_workload precompile_workload()
+# Code inferred for other modules' methods is kept too, as PrecompileTools does: without it the
+# first open takes twice as long.
+if Base.generating_output()
+    ccall(:jl_tag_newly_inferred_enable, Cvoid, ())
+    try
+        precompile_workload()
+    finally
+        ccall(:jl_tag_newly_inferred_disable, Cvoid, ())
+    end
+end
