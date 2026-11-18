@@ -2,10 +2,8 @@
 
 [![CI](https://github.com/IanButterworth/DocBrowser.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/IanButterworth/DocBrowser.jl/actions/workflows/CI.yml)
 
-A full-screen browser in the REPL for Julia's manual and the docstrings of every loaded module.
+A full-window browser in the REPL for Julia's manual and the docstrings of every loaded module.
 Press Enter at an empty `help?>` prompt to open it.
-
-[![asciicast](https://asciinema.org/a/fdMMnv610TgA8LKv.svg)](https://asciinema.org/a/fdMMnv610TgA8LKv)
 
 ## Installation
 
@@ -68,9 +66,10 @@ address of a page of docs.julialang.org or pkgdocs.julialang.org works too.
 
 Julia's releases do not include the Markdown source of the manual. The first time the browser
 opens, it downloads it (about 1.7 MB) from the Julia repository, at the commit your Julia was
-built from, and keeps it in the depot's scratch space. Until that finishes, the manual is not
-listed. To download it ahead of time, for example before going offline, run
-`DocBrowser.download_manual()`.
+built from, and keeps it in the depot's scratch space. Contents shows *Manual loading…* until
+that finishes, or *Manual failed*, whose page has a link to try again. If that commit is not on GitHub,
+as for some local builds, the nearest version is downloaded instead, and its pages say so. To
+download it ahead of time, for example before going offline, run `DocBrowser.download_manual()`.
 
 The standard libraries, including Pkg, ship their manuals with their source, so those are
 always there.

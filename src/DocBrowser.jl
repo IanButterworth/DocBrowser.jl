@@ -1,7 +1,7 @@
 """
     DocBrowser
 
-Opens a full-screen browser of Julia's manual and the documentation of every loaded module
+Opens a full-window browser of Julia's manual and the documentation of every loaded module
 from the REPL's help mode: press Enter at an empty `help?>` prompt.
 
 Loading this package only sets up help mode. The browser itself, in DocBrowserCore, is loaded
