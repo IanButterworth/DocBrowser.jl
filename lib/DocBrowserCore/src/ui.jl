@@ -2575,7 +2575,7 @@ end
 ## Help ##
 
 const HELP_TEXT = """
-This browser shows Julia's manual, under *Manual*, *Base reference* and *Developer docs*, and the docstrings of the loaded modules, with a package's README when it has no module docstring. A package's page links to its own manual page when it ships one, as *manual*, and to its full documentation online as *docs*. Julia's manual is also at <$(julia_docs())>.
+This browser shows Julia's manual, under *Julia*, and the loaded packages, under *Packages*. Each library is one row: select it to list the pages of its manual, if its source has one, and then its names. A package with no module docstring shows its README instead. A package's page links to its full documentation online as *docs*. Julia's manual is also at <$(julia_docs())>.
 
 # Moving around
 

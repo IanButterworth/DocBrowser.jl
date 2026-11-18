@@ -2,7 +2,8 @@
 
 [![CI](https://github.com/IanButterworth/DocBrowser.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/IanButterworth/DocBrowser.jl/actions/workflows/CI.yml)
 
-A full-window browser in the REPL for Julia's manual and the docstrings of every loaded module.
+A full-window browser in the REPL for Julia's manual, the manuals of your packages, and the
+docstrings of every loaded module.
 Press Enter at an empty `help?>` prompt to open it.
 
 ## Installation
@@ -29,8 +30,8 @@ first time you open it. Julia 1.12 and later are supported.
 The browser has three panes:
 
 - **Contents:** *Julia*, with its manual (*Manual*, *Base*, *Standard library*, *Developer docs*),
-  then the loaded *Packages*, the active project's dependencies first, and then `Main`, where
-  your own definitions are. Each library is one row: `Core` and `Base` are in *Base*, and the
+  then *Packages*: the active *Project*, its *Dependencies*, *Indirect* dependencies and
+  *Extensions*, and last `Main`, where your own definitions are. Each library is one row: `Core` and `Base` are in *Base*, and the
   standard libraries in *Standard library*. Dependencies that are not loaded yet are listed
   too: select one and press Enter to load it.
 - **Names:** the sections of a manual page, or the names in a module, grouped by kind. Each is
@@ -74,9 +75,17 @@ as for some local builds, the nearest version is downloaded instead, and its pag
 download it ahead of time, for example before going offline, run `DocBrowser.download_manual()`.
 
 The standard libraries, including Pkg, ship their manuals with their source, so those are
-always there. So do most packages, in `docs/src`, in the order their `docs/make.jl` gives.
-Pages that the documentation build writes, such as Literate tutorials, are not in the source,
-and a notice on the package's manual pages says when some are missing.
+always there.
+
+### Package manuals
+
+Most packages keep their manual's pages in `docs/src`, so the browser shows them, in the order
+that `docs/make.jl` gives, and expands their `@autodocs` blocks into lists of names. They come
+from the installed version of the package, so a package whose release predates its `docs/`
+directory shows only its README and docstrings until its next release.
+
+Pages that the documentation build writes, such as Literate tutorials, are not in the source.
+When some are missing, the package's pages say so and link to its online docs.
 
 ## Settings
 
@@ -91,7 +100,7 @@ it binds Enter and Alt-Enter, and handles pasted `help?> docs: ...` lines. It al
 the `julia>` prompt, to show a hint on the empty `help?>` prompt. Your own key bindings for
 those keys are kept underneath and still run for everything else.
 
-## Packages
+## Repository layout
 
 This repository holds two packages:
 
@@ -100,7 +109,18 @@ This repository holds two packages:
 - **DocBrowserCore**, in [`lib/DocBrowserCore`](lib/DocBrowserCore): the browser itself.
   `DocBrowserCore.browse()` opens it without the help mode set-up.
 
-## Origin
+## Compared with a standard library
 
 This started as a pull request to add the browser to Julia as a standard library,
-[JuliaLang/julia#64993](https://github.com/JuliaLang/julia/pull/64993).
+[JuliaLang/julia#64993](https://github.com/JuliaLang/julia/pull/64993), which was not merged.
+As a package it does almost everything that would have, but:
+
+- it has to be installed, and loaded from `startup.jl`;
+- Julia's manual is downloaded on first use, rather than shipped with Julia, so it is not there
+  offline until then;
+- a `docs:` link works only for people who have the package;
+- it changes the REPL's help mode through REPL internals, which a later Julia could change;
+- before Julia 1.14 it keeps to the terminal's 16 named colours, and some tips link to the top of
+  a page rather than a heading.
+
+[Issue #2](https://github.com/IanButterworth/DocBrowser.jl/issues/2) compares the two in full.
