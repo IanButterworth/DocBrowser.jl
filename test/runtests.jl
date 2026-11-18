@@ -1,5 +1,8 @@
 using Test
 using REPL
+# Loading the browser should not load Downloads, unless something already has.
+const DOWNLOADS_PRELOADED = haskey(Base.loaded_modules,
+    Base.PkgId(Base.UUID("f43a241f-c20a-4ad4-852c-f6b1247861c6"), "Downloads"))
 using Random
 using Markdown
 using DocBrowser: DocBrowser, KeyEvent, MouseEvent, PasteEvent, read_event, Catalog,
@@ -8,8 +11,7 @@ using DocBrowser: DocBrowser, KeyEvent, MouseEvent, PasteEvent, read_event, Cata
 
 isdefined(Test, :detect_closure_boxes) && @test isempty(Test.detect_closure_boxes(DocBrowser))
 
-# Downloads, with libcurl and OpenSSL, is loaded only to download the manual.
-@test !haskey(Base.loaded_modules, DocBrowser.DOWNLOADS)
+DOWNLOADS_PRELOADED || @test !haskey(Base.loaded_modules, DocBrowser.DOWNLOADS)
 # The tests of the manual need its pages, which releases of Julia do not include.
 # Downloaded first, so that no download is still running when the tests end.
 @test isdir(DocBrowser.download_manual())
@@ -758,10 +760,12 @@ end
 @testset "the nearest manual" begin
     refs = DocBrowser.manual_refs()
     @test first(refs) == DocBrowser.julia_ref() && last(refs) == "master"
-    # A commit that is not on GitHub falls back to the next place.
-    @test first(DocBrowser.find_manual_ref(["0"^40, "master"])) == "master"
     dir = DocBrowser.manual_dir()
-    if dir == DocBrowser.downloaded_manual_dir()
+    # Only a Julia without the manual installed goes online for it.
+    if DocBrowser.installed_manual_dir() === nothing
+        @test dir == DocBrowser.downloaded_manual_dir()
+        # A commit that is not on GitHub falls back to the next place.
+        @test first(DocBrowser.find_manual_ref(["0"^40, "master"])) == "master"
         page = joinpath(dir, "manual", "variables.md")
         cat = Catalog()
         text(p) = join(map(l -> strip(String(l)), p.lines), ' ')

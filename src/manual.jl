@@ -2,9 +2,11 @@
 # pages of the standard libraries.
 
 # Where the Markdown source of the manual is: installed with Julia if it is, or downloaded.
-function manual_dir()
-    installed = normpath(Sys.BINDIR, Base.DOCDIR, "src")
-    return isfile(joinpath(installed, "pages.toml")) ? installed : downloaded_manual_dir()
+manual_dir() = something(installed_manual_dir(), downloaded_manual_dir())
+
+function installed_manual_dir()
+    dir = normpath(Sys.BINDIR, Base.DOCDIR, "src")
+    return isfile(joinpath(dir, "pages.toml")) ? dir : nothing
 end
 
 """

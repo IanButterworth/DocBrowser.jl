@@ -79,9 +79,13 @@ end
 
 Download the Markdown source of Julia's manual for this version of Julia, and return the
 directory it is kept in. If the commit Julia was built from is not on GitHub, the nearest
-version is downloaded instead: the release's tag, or its release branch, or master. The browser does this by itself the first time it opens.
+version is downloaded instead: the release's tag, or its release branch, or master. The
+browser does this by itself the first time it opens. If Julia has the manual installed, this
+returns where it is, without downloading anything.
 """
 function download_manual(; force::Bool=false)
+    installed = installed_manual_dir()
+    installed === nothing || return installed
     dir = downloaded_manual_dir()
     isfile(joinpath(dir, "pages.toml")) && !force && return dir
     ref, make = find_manual_ref(manual_refs())
