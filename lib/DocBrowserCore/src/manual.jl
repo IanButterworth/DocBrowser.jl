@@ -422,6 +422,14 @@ function manual_page(cat::Catalog, path::String, width::Int)
             addline!(pb)
         end
     end
+    source = startswith(path, manual_dir()) ? manual_source() : nothing
+    if source !== nothing
+        commit = first(julia_ref(), 10)
+        from = startswith(source, "v") ? source : "the $source branch"
+        note = "This Julia was built from $commit, which is not on GitHub, so this page is from $from."
+        addflow!(pb, "  ", Any[(w * " ", :REPL_DocBrowser_dim) for w in split(note)])
+        addline!(pb)
+    end
     md = Markdown.parse(read(path, String))
     documenter!(md, path, ctx, cat)
     add_markdown!(pb, md, ctx, cat)

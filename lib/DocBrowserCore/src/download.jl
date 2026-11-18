@@ -5,6 +5,35 @@ const JULIA_RAW = "https://raw.githubusercontent.com/JuliaLang/julia"
 
 julia_ref() = (c = Base.GIT_VERSION_INFO.commit; isempty(c) ? "v$VERSION" : c)
 
+# Where to look for the manual, nearest first. A local build or a fork can be at a commit
+# that is not on GitHub, so then it is the release's tag, or for a development version its
+# release branch or master.
+function manual_refs()
+    refs = [julia_ref()]
+    v = VERSION
+    "DEV" in v.prerelease || push!(refs, "v$v")
+    push!(refs, "release-$(v.major).$(v.minor)", "master")
+    return unique!(refs)
+end
+
+# The first of `refs` that has the manual, and its `doc/make.jl`.
+function find_manual_ref(refs)
+    for ref in refs
+        try
+            return ref, String(take!(Downloads.download("$JULIA_RAW/$ref/doc/make.jl", IOBuffer())))
+        catch err
+            err isa Downloads.RequestError && err.response.status == 404 || rethrow()
+        end
+    end
+    error("Julia's manual was not found at any of $(join(refs, ", "))")
+end
+
+# The version of the manual that was downloaded, if it is not the one this Julia was built from.
+function manual_source(dir::String=manual_dir())
+    file = joinpath(dir, "source.txt")
+    return isfile(file) ? strip(read(file, String)) : nothing
+end
+
 downloaded_manual_dir() = joinpath(first(DEPOT_PATH), "scratchspaces", string(PkgId(@__MODULE__).uuid),
                                    "manual", julia_ref())
 
@@ -44,14 +73,16 @@ end
     DocBrowserCore.download_manual(; force=false) -> String
 
 Download the Markdown source of Julia's manual for this version of Julia, and return the
-directory it is kept in. The browser does this by itself the first time it opens.
+directory it is kept in. If the commit Julia was built from is not on GitHub, the nearest
+version is downloaded instead: the release's tag, or its release branch, or master. The browser does this by itself the first time it opens.
 """
 function download_manual(; force::Bool=false)
     dir = downloaded_manual_dir()
     isfile(joinpath(dir, "pages.toml")) && !force && return dir
-    base = "$JULIA_RAW/$(julia_ref())"
+    ref, make = find_manual_ref(manual_refs())
+    base = "$JULIA_RAW/$ref"
     fetch(rel) = String(take!(Downloads.download("$base/$rel", IOBuffer())))
-    lists = make_page_lists(fetch("doc/make.jl"))
+    lists = make_page_lists(make)
     rels = [lists["manual"]; lists["base"]; (p for g in lists["devdocs"] for p in g["pages"])...]
     tmp = mktempdir(mkpath(dirname(dir)))
     try
@@ -68,6 +99,7 @@ function download_manual(; force::Bool=false)
         # The release notes are at the top of the repository; the docs build copies them in.
         write(joinpath(tmp, "NEWS.md"), fetch("NEWS.md"))
         open(io -> write_pages_toml(io, lists), joinpath(tmp, "pages.toml"), "w")
+        ref == julia_ref() || write(joinpath(tmp, "source.txt"), ref)
         force && rm(dir; force=true, recursive=true)
         mv(tmp, dir; force=true)
     catch

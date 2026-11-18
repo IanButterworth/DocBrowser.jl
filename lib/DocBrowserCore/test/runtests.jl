@@ -752,6 +752,27 @@ end
     @test DocBrowserCore.manual_target("file:///a/b.txt") === nothing
 end
 
+@testset "the nearest manual" begin
+    refs = DocBrowserCore.manual_refs()
+    @test first(refs) == DocBrowserCore.julia_ref() && last(refs) == "master"
+    # A commit that is not on GitHub falls back to the next place.
+    @test first(DocBrowserCore.find_manual_ref(["0"^40, "master"])) == "master"
+    dir = DocBrowserCore.manual_dir()
+    if dir == DocBrowserCore.downloaded_manual_dir()
+        page = joinpath(dir, "manual", "variables.md")
+        cat = Catalog()
+        text(p) = join(map(l -> strip(String(l)), p.lines), ' ')
+        @test !occursin("not on GitHub", text(DocBrowserCore.manual_page(cat, page, 60)))
+        write(joinpath(dir, "source.txt"), "master")
+        try
+            p = DocBrowserCore.manual_page(cat, page, 60)
+            @test occursin("which is not on GitHub, so this page is from the master branch.", text(p))
+        finally
+            rm(joinpath(dir, "source.txt"))
+        end
+    end
+end
+
 @testset "the headings of a page line up with what it shows" begin
     mktempdir() do dir
         path = joinpath(dir, "page.md")
