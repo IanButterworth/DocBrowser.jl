@@ -773,6 +773,30 @@ end
     end
 end
 
+@testset "the state of the manual download" begin
+    b = Browser(fake_terminal(""))
+    manual = b.cat.manual
+    b.cat.manual = filter(p -> p.role !== :manual, manual)
+    DocBrowserCore.MANUAL_ERROR[] = "RequestError: Could not resolve host"
+    try
+        DocBrowserCore.refresh_side!(b)
+        @test any(l -> occursin("Manual failed", l), strip_ansi.(frame(b)))
+        p = DocBrowserCore.section_page(b.cat, :manual, 80)
+        @test occursin("could not be downloaded: RequestError", join(String.(p.lines), ' '))
+        retry = only(s for s in p.spots if s.target == DocBrowserCore.ToggleTarget(:download))
+        # Trying again clears the error, and once it is done the manual is listed.
+        DocBrowserCore.follow!(b, retry.target)
+        @test DocBrowserCore.manual_status() in (:downloading, :none)
+        wait(DocBrowserCore.MANUAL_DOWNLOAD[])
+        @test DocBrowserCore.manual_status() === :none
+        @test any(p -> p.role === :manual, b.cat.manual)
+        @test !any(l -> occursin(r"Manual (failed|loading)", l), strip_ansi.(frame(b)))
+    finally
+        DocBrowserCore.MANUAL_ERROR[] = DocBrowserCore.MANUAL_DOWNLOAD[] = nothing
+        b.cat.manual = manual
+    end
+end
+
 @testset "the headings of a page line up with what it shows" begin
     mktempdir() do dir
         path = joinpath(dir, "page.md")

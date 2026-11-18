@@ -1,7 +1,7 @@
 """
     DocBrowserCore
 
-A full-screen, mouse-aware browser for Julia's manual and the documentation of every loaded module.
+A full-window, mouse-aware browser for Julia's manual and the documentation of every loaded module.
 
 The DocBrowser package loads it when the browser is first opened, from `help?>`. Call
 [`DocBrowserCore.browse`](@ref) to open it directly.

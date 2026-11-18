@@ -144,6 +144,7 @@ is_block(role::Symbol) = role === :docs || role === :code
 pkg_pages(b::Browser) = filter(p -> p.role === :pkgdocs, b.cat.manual)
 
 function has_section(b::Browser, role::Symbol)
+    role === :manual && manual_status() !== :none && return true
     role in MANUAL_ROLES && return any(p -> p.role === role, b.cat.manual)
     role === :direct && !isempty(b.cat.unloaded) && return true
     return any(p -> p.role === role, b.cat.pkgs)
@@ -468,7 +469,8 @@ function follow!(b::Browser, t::Target)
         b.focus = :doc
         b.link = 0
     elseif t isa ToggleTarget
-        t.flag === :tip ? next_tip!(b, 1) : t.flag === :tip_back ? next_tip!(b, -1) : toggle_flag!(b, t.flag)
+        t.flag === :tip ? next_tip!(b, 1) : t.flag === :tip_back ? next_tip!(b, -1) :
+            t.flag === :download ? download_manual!(b) : toggle_flag!(b, t.flag)
     elseif t isa CodeTarget
         b.result = t.code
         b.quit = true
@@ -963,6 +965,7 @@ function describe_target(b::Browser, p::Page, t)
         t.flag === :extended && return "shows or hides the extended help (x)"
         t.flag === :tip && return "shows the next tip (t)"
         t.flag === :tip_back && return "shows the previous tip (T)"
+        t.flag === :download && return "downloads the manual again"
         return "finds every method that takes this type; this can take a moment"
     elseif t isa SectionTarget
         return "→ $(getfield(SECTION_TITLES, t.role))"
@@ -1159,7 +1162,9 @@ function list_line(b::Browser, pane::Symbol, i::Int, x::Int, w::Int, row::Int)
                 put_seg!(rb, role === :indirect && has_section(b, :direct) ? "   " : " ")
                 put_seg!(rb, chevron, :REPL_DocBrowser_dim, action)
                 put_seg!(rb, getfield(SIDEBAR_TITLES, role), :REPL_DocBrowser_section, action)
-                put_seg!(rb, " $n", :REPL_DocBrowser_dim, action)
+                status = role === :manual && n == 0 ? manual_status() : :none
+                put_seg!(rb, status === :downloading ? " loading…" : status === :failed ? " failed" : " $n",
+                         :REPL_DocBrowser_dim, action)
             end
         else
             p = r.pkg
@@ -2680,21 +2685,28 @@ end
 
 # Drawn with `rich_faces` when the terminal allows, except where the user has set a face.
 function run!(b::Browser)
-    if !Base.generating_output() && !any(p -> p.role === :manual, b.cat.manual)
-        start_manual_download() do
-            @lock b.lock begin
-                b.cat.manual = manual_pages()
-                b.cat.anchors = b.cat.sections = nothing
-                empty!(b.cat.index_headings)
-                b.quit || draw(b)
-            end
-        end
-    end
+    !Base.generating_output() && !any(p -> p.role === :manual, b.cat.manual) && download_manual!(b)
     faces = rich_faces()
     custom = hasproperty(StyledStrings.FACES, :modifications) ? values(StyledStrings.FACES.modifications) : ()
     StyledStrings.withfaces(Iterators.filter(((k, _),) -> !any(m -> haskey(m, k), custom), faces)) do
         run_screen!(b)
     end
+end
+
+function download_manual!(b::Browser)
+    start_manual_download() do
+        @lock b.lock begin
+            b.cat.manual = manual_pages()
+            b.cat.anchors = b.cat.sections = nothing
+            empty!(b.cat.index_headings)
+            empty!(b.pages)
+            refresh_side!(b)
+            b.quit || draw(b)
+        end
+    end
+    # so that the sidebar and the Manual section show that it is downloading
+    empty!(b.pages)
+    refresh_side!(b)
 end
 
 function run_screen!(b::Browser)

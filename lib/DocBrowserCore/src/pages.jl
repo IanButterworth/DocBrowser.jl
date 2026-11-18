@@ -1026,6 +1026,15 @@ function section_page(cat::Catalog, role::Symbol, width::Int)
     addline!(pb, "  ", (getfield(SECTION_TITLES, role), :REPL_DocBrowser_title))
     rule!(pb)
     add_markdown!(pb, Markdown.parse(getfield(SECTION_BLURBS, role)), Base, cat)
+    status = role === :manual && !any(p -> p.role === :manual, cat.manual) ? manual_status() : :none
+    if status === :downloading
+        addflow!(pb, "  ", Any[(w * " ", :REPL_DocBrowser_dim) for w in
+                               split("Downloading the manual from GitHub. Its pages are listed here once it is done.")])
+    elseif status === :failed
+        addflow!(pb, "  ", Any[w * " " for w in split("The manual could not be downloaded: $(MANUAL_ERROR[])")])
+        addline!(pb)
+        addline!(pb, "  ", ("▸ Try again", nothing, ToggleTarget(:download)))
+    end
     if role in (:direct, :project)
         proj = Base.active_project()
         proj === nothing || addline!(pb, "  ", ("Active project: " * Base.contractuser(proj), :REPL_DocBrowser_dim))

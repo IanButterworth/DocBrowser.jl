@@ -109,21 +109,34 @@ function download_manual(; force::Bool=false)
     return dir
 end
 
-# The download that a browser started, so that only one runs at a time.
+# The download that a browser started, so that only one runs at a time, and why the last one
+# failed, if it did.
 const MANUAL_DOWNLOAD = Ref{Union{Nothing,Task}}(nothing)
+const MANUAL_ERROR = Ref{Union{Nothing,String}}(nothing)
 
-# Start downloading the manual in the background, unless it is there or being downloaded.
-# A download that fails is tried again the next time the browser opens.
+# Start downloading the manual in the background, unless it is there or being downloaded, and
+# call `on_done` when it is done or has failed. A download that fails can be tried again.
 function start_manual_download(on_done)
     MANUAL_DOWNLOAD[] === nothing || return nothing
-    MANUAL_DOWNLOAD[] = @async try
-        download_manual()
+    MANUAL_ERROR[] = nothing
+    MANUAL_DOWNLOAD[] = @async begin
+        try
+            download_manual()
+        catch err
+            @debug "Downloading the manual failed" exception=(err, catch_backtrace())
+            MANUAL_ERROR[] = first(split(sprint(showerror, err), '\n'))
+            MANUAL_DOWNLOAD[] = nothing
+        end
         Base.invokelatest(on_done)
-    catch err
-        @debug "Downloading the manual failed" exception=(err, catch_backtrace())
-        MANUAL_DOWNLOAD[] = nothing
     end
     return nothing
+end
+
+# `:downloading`, `:failed`, or `:none` when no download has run or the last one worked.
+function manual_status()
+    MANUAL_ERROR[] === nothing || return :failed
+    t = MANUAL_DOWNLOAD[]
+    return t === nothing || istaskdone(t) ? :none : :downloading
 end
 
 # Julia can crash if it exits while a download is running, so a running one gets a few seconds
