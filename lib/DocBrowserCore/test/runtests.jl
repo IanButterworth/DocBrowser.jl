@@ -838,6 +838,11 @@ end
             @test [(p.title, p.group) for p in docs.pages] == [("Home", ""), ("API", "Guide")]
             @test docs.missing == ["tutorial.md"] && docs.generator == "Literate"
             @test occursin("written by Literate", DocBrowserCore.docs_gap(docs))
+            # The notice links to the online docs when they are known.
+            pb = DocBrowserCore.PageBuilder(60)
+            DocBrowserCore.gap_notice!(pb, docs, "https://example.org/docs/")
+            @test only(s.target for s in pb.spots) == DocBrowserCore.URLTarget("https://example.org/docs/")
+            @test occursin("The online docs should have all of it.", join(map(l -> strip(String(l)), pb.lines), ' '))
             @test DocBrowserCore.autodocs_names("Modules = [DocsFixture]", M, cat) == ["Loud", "shout", "whisper"]
             text(p) = join(map(l -> strip(String(l)), p.lines), ' ')
             api = DocBrowserCore.manual_page(cat, docs.pages[2].path, 80)

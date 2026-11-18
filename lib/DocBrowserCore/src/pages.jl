@@ -784,17 +784,22 @@ function add_links!(pb::PageBuilder, id::PkgId, dir, role::Symbol)
             repo = "https://github.com/JuliaBinaryWrappers/$(id.name).jl"
         end
         repo === nothing || link!("repo", repo)
-        docs = isjll(id.name) ? nothing : docs_url(dir)
+        docs = online_docs(id, dir)
         if docs !== nothing
             link!("docs", docs)
-        elseif isjll(id.name)
-        elseif Base.is_stdlib(id)
-            link!("docs", julia_docs("stdlib/$(id.name)/"))
-        elseif repo === nothing
+        elseif repo === nothing && !isjll(id.name)
             link!("search the web for", web_search(id.name).url, "$(id.name).jl")
         end
     end
     isempty(segs) || addflow!(pb, "  ", segs)
+end
+
+# Where a package's documentation is online, if that is known.
+function online_docs(id::PkgId, dir)
+    isjll(id.name) && return nothing
+    url = docs_url(dir)
+    url === nothing && Base.is_stdlib(id) && return julia_docs("stdlib/$(id.name)/")
+    return url
 end
 
 ## Pages for modules ##
@@ -876,7 +881,7 @@ function module_page(cat::Catalog, m::Module, width::Int)
         addline!(pb, "  ", ("manual ", :REPL_DocBrowser_dim), (title, nothing, ManualTarget(manual, "")),
                  (n > 1 ? "  $n pages, listed with the names" : "", :REPL_DocBrowser_dim))
     end
-    gap_notice!(pb, docs)
+    p === nothing || gap_notice!(pb, docs, online_docs(p.id, dir))
     rule!(pb)
     results = doc_results(module_binding(m))
     if !isempty(results)

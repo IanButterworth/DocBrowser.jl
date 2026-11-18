@@ -423,7 +423,7 @@ function manual_page(cat::Catalog, path::String, width::Int)
         addline!(pb, "  ", ("the $(pkg.id.name) manual  ", :REPL_DocBrowser_dim),
                  ("↑ $(pkg.id.name)", nothing, ModuleTarget(pkg.mod)))
         addline!(pb)
-        gap_notice!(pb, package_docs(cat, pkg.mod))
+        gap_notice!(pb, package_docs(cat, pkg.mod), online_docs(pkg.id, pkgdir(pkg.mod)))
     end
     if in_stdlib_dir(path) && ctx === Main
         # The page of a standard library that is not loaded: its names can only be links once it is.

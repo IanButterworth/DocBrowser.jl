@@ -151,14 +151,24 @@ function docs_gap(docs::PackageDocs)
         shown = join(first(docs.missing, 3), ", ") * (n > 3 ? " and $(n - 3) more" : "")
         s *= " Missing here: $shown."
     end
-    return s * " The online docs have all of it."
+    return s * " The online docs should have all of it."
 end
 
-# The notice of a gap, as a dim paragraph.
-function gap_notice!(pb::PageBuilder, docs::PackageDocs)
+# The notice of a gap, as a dim paragraph, with a link to the online docs at `url` if known.
+function gap_notice!(pb::PageBuilder, docs::PackageDocs, url)
     s = docs_gap(docs)
     s === nothing && return
-    addflow!(pb, "  ", Any[(w * " ", :REPL_DocBrowser_dim) for w in split("⚠ " * s)])
+    words = split("⚠ " * s)
+    link = url === nothing ? nothing : findfirst(==("online"), words)
+    segs = Any[]
+    for (i, w) in enumerate(words)
+        if link !== nothing && i == link
+            push!(segs, Any[("online docs", nothing, URLTarget(url)), (" ", nothing)])
+        elseif link === nothing || i != link + 1
+            push!(segs, (w * " ", :REPL_DocBrowser_dim))
+        end
+    end
+    addflow!(pb, "  ", segs)
     addline!(pb)
 end
 
