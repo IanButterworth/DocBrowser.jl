@@ -303,8 +303,11 @@ end
 
 # The module that names on a manual page are looked up in: the standard library it documents,
 # or else `Main`.
-function manual_context(path::String)
-    in_stdlib_dir(path) || return Main
+function manual_context(path::String, cat::Union{Nothing,Catalog}=nothing)
+    if !in_stdlib_dir(path)
+        p = cat === nothing ? nothing : page_package(cat, path)
+        return p === nothing ? Main : p.mod
+    end
     name = first(splitpath(relpath(path, normpath(Sys.STDLIB))))
     for m in Base.loaded_modules_array()
         String(nameof(m)) == name && return m
@@ -342,20 +345,23 @@ Turn the Documenter syntax of a manual page into plain Markdown that the browser
     to those pages.
 """
 function documenter!(md::Markdown.MD, path::String, ctx::Module, cat::Catalog)
-    md.content = documenter_blocks(md.content)
+    md.content = documenter_blocks(md.content, ctx, cat)
     walk_md(md) do x
         x isa Markdown.Link && (x.url = manual_link(x, path, ctx, cat))
     end
     return md
 end
 
-function documenter_blocks(blocks::Vector)
+function documenter_blocks(blocks::Vector, ctx::Module=Main, cat::Union{Nothing,Catalog}=nothing)
     out = Any[]
     for x in blocks
         if x isa Markdown.Code && startswith(x.language, "@")
             lang = first(split(x.language))
             if lang in ("@example", "@repl")
                 push!(out, Markdown.Code("julia", x.code))
+            elseif lang == "@autodocs" && cat !== nothing
+                names = autodocs_names(x.code, ctx, cat)
+                isempty(names) || push!(out, Markdown.List(Any[Any[Markdown.Paragraph(Any[Markdown.Code(n)])] for n in names], -1, false))
             elseif lang == "@docs"
                 items = Any[]
                 for line in split(x.code, '\n')
@@ -370,7 +376,7 @@ function documenter_blocks(blocks::Vector)
             end
             push!(out, x)
         elseif x isa Markdown.Admonition
-            x.content = documenter_blocks(x.content)
+            x.content = documenter_blocks(x.content, ctx, cat)
             push!(out, x)
         else
             push!(out, x)
@@ -411,7 +417,14 @@ A manual page, with its Documenter syntax made plain.
 function manual_page(cat::Catalog, path::String, width::Int)
     pb = PageBuilder(width)
     addline!(pb)
-    ctx = manual_context(path)
+    ctx = manual_context(path, cat)
+    pkg = in_stdlib_dir(path) ? nothing : page_package(cat, path)
+    if pkg !== nothing
+        addline!(pb, "  ", ("the $(pkg.id.name) manual  ", :REPL_DocBrowser_dim),
+                 ("↑ $(pkg.id.name)", nothing, ModuleTarget(pkg.mod)))
+        addline!(pb)
+        gap_notice!(pb, package_docs(cat, pkg.mod))
+    end
     if in_stdlib_dir(path) && ctx === Main
         # The page of a standard library that is not loaded: its names can only be links once it is.
         name = first(splitpath(relpath(path, normpath(Sys.STDLIB))))

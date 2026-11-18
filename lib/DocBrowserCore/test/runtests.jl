@@ -797,6 +797,77 @@ end
     end
 end
 
+@testset "package manuals" begin
+    mktempdir() do dir
+        pkg = joinpath(dir, "DocsFixture")
+        mkpath(joinpath(pkg, "src")); mkpath(joinpath(pkg, "docs", "src", "man"))
+        write(joinpath(pkg, "Project.toml"), "name = \"DocsFixture\"\nuuid = \"5f0c6a0e-5f2b-4a4b-9d39-2f7cbbd3a6c1\"\n")
+        write(joinpath(pkg, "src", "DocsFixture.jl"), """
+            module DocsFixture
+            export shout, Loud
+            "Says it loudly."
+            shout(x) = uppercase(x)
+            "A loud thing."
+            struct Loud end
+            "Not exported."
+            whisper(x) = lowercase(x)
+            end
+            """)
+        write(joinpath(pkg, "docs", "make.jl"), """
+            using Documenter, Literate, DocsFixture
+            Literate.markdown("tutorial.jl", "src")
+            const PAGES = Any["Home" => "index.md", "Guide" => ["man/api.md", "Tutorial" => "tutorial.md"]]
+            makedocs(; sitename = "DocsFixture", pages = PAGES)
+            """)
+        write(joinpath(pkg, "docs", "src", "index.md"), "# DocsFixture\n\nSee [the API](man/api.md).\n")
+        write(joinpath(pkg, "docs", "src", "man", "api.md"), """
+            # API
+
+            ```@autodocs
+            Modules = [DocsFixture]
+            Order = [:type, :function]
+            Private = false
+            ```
+            """)
+        push!(LOAD_PATH, dir)
+        try
+            M = Base.require(Main, :DocsFixture)
+            cat = Catalog()
+            docs = DocBrowserCore.package_docs(cat, M)
+            # The pages are in the order of the build, with the titles it gives them.
+            @test [(p.title, p.group) for p in docs.pages] == [("Home", ""), ("API", "Guide")]
+            @test docs.missing == ["tutorial.md"] && docs.generator == "Literate"
+            @test occursin("written by Literate", DocBrowserCore.docs_gap(docs))
+            @test DocBrowserCore.autodocs_names("Modules = [DocsFixture]", M, cat) == ["Loud", "shout", "whisper"]
+            text(p) = join(map(l -> strip(String(l)), p.lines), ' ')
+            api = DocBrowserCore.manual_page(cat, docs.pages[2].path, 80)
+            @test occursin(r"• +Loud +• +shout", text(api)) && !occursin("whisper", text(api))
+            @test occursin("the DocsFixture manual", text(api)) && occursin("Missing here: tutorial.md", text(api))
+            @test NameTarget(M, :shout) in [s.target for s in api.spots]
+            @test occursin("2 pages", text(module_page(cat, M, 80)))
+            # The names pane lists the pages before the names, and picking one shows it.
+            b = Browser(fake_terminal(""), cat)
+            DocBrowserCore.show_module!(b, M)
+            i = findfirst(r -> r.kind === :pkgpage, b.name_rows)
+            @test b.name_rows[i - 1].group === :manual && count(r -> r.kind === :pkgpage, b.name_rows) == 2
+            b.names.cursor = i + 1
+            @test DocBrowserCore.current_key(b) == DocBrowserCore.ManualTarget(docs.pages[2].path, "")
+            @test any(l -> occursin("API", l), strip_ansi.(frame(b)))
+        finally
+            filter!(!=(dir), LOAD_PATH)
+        end
+    end
+    # A build script with no literal list of pages, and a directory other than `src`.
+    @test DocBrowserCore.doc_page_list("makedocs(pages = make_pages())") === nothing
+    mktempdir() do dir
+        mkpath(joinpath(dir, "docs", "source"))
+        write(joinpath(dir, "docs", "make.jl"), "makedocs(source = \"source\", pages = [\"a.md\"])")
+        write(joinpath(dir, "docs", "source", "a.md"), "# A\n")
+        docs = DocBrowserCore.package_docs(dir)
+        @test [p.title for p in docs.pages] == ["A"] && DocBrowserCore.docs_gap(docs) === nothing
+    end
+end
+
 @testset "the headings of a page line up with what it shows" begin
     mktempdir() do dir
         path = joinpath(dir, "page.md")

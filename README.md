@@ -33,7 +33,7 @@ The browser has three panes:
   that are not loaded yet are listed too: select one and press Enter to load it.
 - **Names:** the sections of a manual page, or the names in a module, grouped by kind. Each is
   marked `●` if exported, `○` if public, or `·` if internal. Press `i` to show internal and
-  deprecated names.
+  deprecated names. A package's own manual, if its source has one, is listed first.
 - **Documentation:** the docstrings of a name, or a module's docstring or README, with its
   version, licence, repository and online docs. Functions list their methods, and types their
   fields, subtypes and constructors.
@@ -72,7 +72,9 @@ as for some local builds, the nearest version is downloaded instead, and its pag
 download it ahead of time, for example before going offline, run `DocBrowser.download_manual()`.
 
 The standard libraries, including Pkg, ship their manuals with their source, so those are
-always there.
+always there. So do most packages, in `docs/src`, in the order their `docs/make.jl` gives.
+Pages that the documentation build writes, such as Literate tutorials, are not in the source,
+and a notice on the package's manual pages says when some are missing.
 
 ## Settings
 

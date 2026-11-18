@@ -43,7 +43,8 @@ NameEntry(mod, name, kind, vis, documented, owner) = NameEntry(mod, name, kind, 
 
 const KINDS = (:module, :type, :function, :macro, :constant, :global)
 const KIND_TITLES = Dict(:module => "Modules", :type => "Types", :function => "Functions",
-                         :macro => "Macros", :constant => "Constants", :global => "Globals")
+                         :macro => "Macros", :constant => "Constants", :global => "Globals",
+                         :manual => "Manual")
 const KIND_GLYPHS = Dict(:module => "M", :type => "T", :function => "ƒ", :macro => "@",
                          :constant => "c", :global => "g")
 
@@ -55,7 +56,7 @@ kind_face(k::Symbol) = Symbol(:REPL_DocBrowser_kind_, k)
     ManualPage
 
 A page of the manual: its file, its title, and the section it belongs to, which is `:manual`,
-`:basedocs`, `:stdlibdocs`, `:pkgdocs` or `:devdocs`. `group` is the part of the developer documentation
+`:basedocs`, `:stdlibdocs`, `:pkgdocs`, `:devdocs`, or `:package` for a package's manual. `group` is the part of the developer documentation
 that it is in.
 """
 struct ManualPage
@@ -103,6 +104,7 @@ mutable struct Catalog
     headings::Dict{String,Vector{Heading}} # the headings each page shows, by page file
     index_headings::Dict{String,Vector{Heading}} # the headings found by scanning each page
     sections::Union{Nothing,Vector{Tuple{String,String,String}}} # lowercased text of each section, built on first use
+    pkgdocs::Dict{String,Any} # the manual of each package, by its directory, found on first use
 end
 
 function parse_uuids(deps)
@@ -256,7 +258,8 @@ function Catalog()
     sort_by!(pkgs, rank)
     bymod = IdDict{Module,PkgEntry}(p.mod => p for p in pkgs)
     return Catalog(pkgs, bymod, documented_bindings(), IdDict{Module,Vector{NameEntry}}(), nothing,
-                   unloaded_deps(), nothing, manual_pages(), nothing, Dict{String,Vector{Heading}}(), Dict{String,Vector{Heading}}(), nothing)
+                   unloaded_deps(), nothing, manual_pages(), nothing, Dict{String,Vector{Heading}}(), Dict{String,Vector{Heading}}(), nothing,
+                   Dict{String,Any}())
 end
 
 function documented_bindings()

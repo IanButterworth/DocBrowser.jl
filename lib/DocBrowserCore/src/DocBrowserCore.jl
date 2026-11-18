@@ -111,6 +111,7 @@ end
 include("catalog.jl")
 include("pages.jl")
 include("manual.jl")
+include("pkgdocs.jl")
 include("download.jl")
 include("start.jl")
 include("input.jl")

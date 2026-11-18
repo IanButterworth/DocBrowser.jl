@@ -235,6 +235,14 @@ function refresh_names!(b::Browser)
         end
     else
         push!(rows, NameRow(:about, nothing, :none, 0))
+        # The pages of the package's manual come before its names.
+        pages = package_docs(b.cat, b.mod).pages
+        isempty(pages) || push!(rows, NameRow(:header, nothing, :manual, length(pages)))
+        if !(:manual in b.collapsed)
+            for (j, p) in enumerate(pages)
+                push!(rows, NameRow(:pkgpage, nothing, :manual, j, ManualHit(p.path, "", 0)))
+            end
+        end
         entries = module_entries(b.cat, b.mod)
         for k in KINDS
             n = 0
@@ -539,7 +547,7 @@ function current_key(b::Browser)
     p = b.query === nothing ? side_page(b) : nothing
     p === nothing || return ManualTarget(p.path, "")
     row = name_row(b)
-    row !== nothing && row.kind === :hit && return ManualTarget(row.hit.path, "")
+    row !== nothing && row.kind in (:hit, :pkgpage) && return ManualTarget(row.hit.path, "")
     row !== nothing && row.kind === :entry && return row.entry
     return ModuleTarget(b.mod)
 end
@@ -681,6 +689,7 @@ function hit_subject(b::Browser, action)
         row === nothing && return nothing
         row.kind === :entry && return row.entry
         row.kind === :hit && return SourceTarget(row.hit.path, hit_line(b.cat, row.hit))
+        row.kind === :pkgpage && return SourceTarget(row.hit.path, 1)
         p = side_page(b)
         return p === nothing ? ModuleTarget(b.mod) : SourceTarget(p.path, 1)
     elseif kind === :load
@@ -906,6 +915,7 @@ function describe(b::Browser, action)
         row.kind === :header && return "⏎ fold or unfold this group"
         row.kind === :heading && return "↓ jumps to this section of the page"
         row.kind === :page && return "this page · ⏎ show or hide its sections"
+        row.kind === :pkgpage && return "a page of $(display_name(b.mod))'s manual · ⏎ read · right-click: source"
         row.kind === :hit && return "the manual: $(manual_title(b.cat, row.hit.path)) · ⏎ open"
         row.kind === :more && return "⏎ search indirect dependencies too (^A)"
         row.kind === :about && side_page(b) !== nothing && return "the top of the page"
@@ -1196,6 +1206,11 @@ function list_line(b::Browser, pane::Symbol, i::Int, x::Int, w::Int, row::Int)
             p = b.cat.manual[manual_page_of(b.cat, r.hit.path)]
             put_seg!(rb, Symbol(p.path) in b.expanded ? " ▾ " : " ▸ ", :REPL_DocBrowser_dim, action)
             put_seg!(rb, p.title, :REPL_DocBrowser_pane_title, action)
+        elseif r.kind === :pkgpage
+            pages = package_docs(b.cat, b.mod).pages
+            r.count in eachindex(pages) || return fit("", w)
+            put_seg!(rb, "   ")
+            put_seg!(rb, pages[r.count].title, nothing, action)
         elseif r.kind === :heading
             path = r.hit === nothing ? (p = side_page(b); p === nothing ? nothing : p.path) : r.hit.path
             hs = path === nothing ? Heading[] : page_headings(b.cat, path)
@@ -1540,7 +1555,7 @@ function card_subject(b::Browser, @nospecialize(action))
         row = get(b.name_rows, action[2], nothing)
         row === nothing && return nothing
         row.kind === :entry && return row.entry
-        row.kind === :hit && return ManualTarget(row.hit.path, row.hit.heading)
+        row.kind in (:hit, :pkgpage) && return ManualTarget(row.hit.path, row.hit.heading)
     elseif kind === :side
         row = get(b.side_rows, action[2], nothing)
         row === nothing && return nothing
@@ -2049,7 +2064,7 @@ function activate!(b::Browser, pane::Symbol)
             toggle_group!(b, row.group)
         elseif row.kind === :page
             toggle_page!(b, row.hit.path)
-        elseif row.kind === :about || row.kind === :heading
+        elseif row.kind === :about || row.kind === :heading || row.kind === :pkgpage
             b.focus = :doc
         elseif row.kind === :hit
             open_manual!(b, row.hit.path, hit_heading(b.cat, row.hit))

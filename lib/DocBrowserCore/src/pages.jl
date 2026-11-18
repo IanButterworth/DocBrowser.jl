@@ -865,12 +865,16 @@ function module_page(cat::Catalog, m::Module, width::Int)
     dir = p === nothing ? nothing : ext ? pathof(m) : pkgdir(m)
     dir === nothing || addline!(pb, "  ", (Base.contractuser(dir), :REPL_DocBrowser_dim))
     p === nothing || ext || add_links!(pb, p.id, dir, p.role)
-    manual = p === nothing || ext ? nothing : package_manual(m)
+    docs = package_docs(cat, m)
+    manual = isempty(docs.pages) ? (p === nothing || ext ? nothing : package_manual(m)) : docs.pages[1].path
     if manual !== nothing
         headings = scan_headings(manual)
         title = isempty(headings) ? "index.md" : headings[1].text
-        addline!(pb, "  ", ("manual ", :REPL_DocBrowser_dim), (title, nothing, ManualTarget(manual, "")))
+        n = length(docs.pages)
+        addline!(pb, "  ", ("manual ", :REPL_DocBrowser_dim), (title, nothing, ManualTarget(manual, "")),
+                 (n > 1 ? "  $n pages, listed with the names" : "", :REPL_DocBrowser_dim))
     end
+    gap_notice!(pb, docs)
     rule!(pb)
     results = doc_results(module_binding(m))
     if !isempty(results)
