@@ -6,7 +6,7 @@
 A loaded top-level module, with its place in the environment.
 
 `role` is one of `:project` (the active project itself), `:direct` (a dependency of the
-active project, or bound in `Main`), `:julia` (`Core`, `Base` and `Main`), `:indirect`
+active project, or bound in `Main`), `:julia` (`Core` and `Base`), `:main` (`Main`), `:indirect`
 (loaded for another package, or by Julia itself) or `:extension`. `version` is `nothing` for extensions and for standard
 libraries shipped with Julia, whose versions do not track Julia's. `via` is the chain of
 packages that pulled an indirect package in, starting from a direct dependency.
@@ -187,7 +187,8 @@ bound_in_main(m::Module) =
     isdefined(Main, nameof(m)) && getglobal(Main, nameof(m)) === m
 
 function role_of(m::Module, id::PkgId, self, direct)
-    (m === Core || m === Base || m === Main) && return :julia
+    m === Main && return :main
+    (m === Core || m === Base) && return :julia
     uuid = id.uuid
     uuid !== nothing && uuid == self && return :project
     uuid !== nothing && uuid in direct && return :direct
@@ -249,11 +250,11 @@ function Catalog()
     pkgs = PkgEntry[]
     for m in mods
         id = PkgId(m)
-        version = roles[m] === :julia ? (m === Main ? nothing : VERSION) :
-            roles[m] === :extension || is_bundled(m) ? nothing : pkgversion(m)
+        version = roles[m] === :julia ? VERSION :
+            roles[m] in (:main, :extension) || is_bundled(m) ? nothing : pkgversion(m)
         push!(pkgs, PkgEntry(m, id, version, roles[m], get(via, m, String[]), extension_parent(id)))
     end
-    rank(p) = (p.role === :julia ? findfirst(==(p.mod), (Base, Core, Main)) : 0,
+    rank(p) = (p.role === :julia ? findfirst(==(p.mod), (Base, Core)) : 0,
                isjll(p.id.name), lowercase(p.id.name))
     sort_by!(pkgs, rank)
     bymod = IdDict{Module,PkgEntry}(p.mod => p for p in pkgs)
@@ -415,7 +416,7 @@ function name_score(q::AbstractString, name::AbstractString)
     return max(1, 150 - (i - first_hit - ncodeunits(q)))
 end
 
-const ROLE_BOOST = (project = 60, direct = 60, julia = 50, stdlib = 20, indirect = 0, extension = 0)
+const ROLE_BOOST = (project = 60, direct = 60, julia = 50, main = 50, stdlib = 20, indirect = 0, extension = 0)
 const VIS_BOOST = (exported = 40, public = 30, internal = 0)
 
 """

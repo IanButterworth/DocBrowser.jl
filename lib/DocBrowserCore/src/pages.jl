@@ -812,7 +812,9 @@ function role_line(cat::Catalog, m::Module)
     elseif p.role === :direct
         push!(segs, (bound_in_main(m) && !in_project(p) ? "loaded in Main" : "direct dependency", :REPL_DocBrowser_exported))
     elseif p.role === :julia
-        push!(segs, (m === Main ? "your workspace module" : "built into Julia", :REPL_DocBrowser_public))
+        push!(segs, ("built into Julia", :REPL_DocBrowser_public))
+    elseif p.role === :main
+        push!(segs, ("your workspace module", :REPL_DocBrowser_public))
     elseif p.role === :extension
         push!(segs, ("package extension", dim))
         p.parent === nothing || push!(segs, (" of ", dim), (p.parent, nothing, package_target(cat, p.parent)))
@@ -864,7 +866,7 @@ function module_page(cat::Catalog, m::Module, width::Int)
     ext = p !== nothing && p.role === :extension
     dir = p === nothing ? nothing : ext ? pathof(m) : pkgdir(m)
     dir === nothing || addline!(pb, "  ", (Base.contractuser(dir), :REPL_DocBrowser_dim))
-    p === nothing || ext || add_links!(pb, p.id, dir, p.role)
+    p === nothing || ext || p.role === :main || add_links!(pb, p.id, dir, p.role)
     docs = package_docs(cat, m)
     manual = isempty(docs.pages) ? (p === nothing || ext ? nothing : package_manual(m)) : docs.pages[1].path
     if manual !== nothing
@@ -907,7 +909,7 @@ function module_page(cat::Catalog, m::Module, width::Int)
         heading!(pb, "Submodules")
         addflow!(pb, "    ", submods)
     end
-    if p !== nothing && p.role !== :julia
+    if p !== nothing && !(p.role in (:julia, :main))
         add_package_links!(pb, cat, "Loaded dependencies", loaded_deps(cat, p))
         add_package_links!(pb, cat, "Used by", dependents(cat, p))
     end
@@ -1004,8 +1006,8 @@ end
 
 ## Pages for sidebar sections ##
 
-const SECTION_TITLES = (docs = "Documentation", code = "Docstrings", project = "Project",
-                        direct = "Dependencies", julia = "Julia", manual = "Manual",
+const SECTION_TITLES = (docs = "Julia", code = "Packages", project = "Project",
+                        direct = "Dependencies", julia = "Core and Base", manual = "Manual",
                         basedocs = "Base", stdlibdocs = "Standard library",
                         indirect = "Indirect dependencies and standard libraries",
                         extension = "Extensions", devdocs = "Developer documentation")
@@ -1013,11 +1015,11 @@ const SECTION_TITLES = (docs = "Documentation", code = "Docstrings", project = "
 const SECTION_BLURBS = (
     project = "The package of the active project.",
     direct = "Packages that the active project depends on, and packages loaded into `Main` with `using` or `import`.",
-    julia = "`Core` and `Base` are always loaded. `Main` is the module the REPL evaluates in, so it holds your own definitions.",
+    julia = "The docstrings of `Core` and `Base`, which are always loaded.",
     indirect = "Packages that were loaded because one of your packages needs them, or that Julia loaded for itself, such as the standard libraries that the REPL uses.",
     extension = "Package extensions: code that a package loads once some other package is loaded too.",
-    docs = "Julia's manual, written as a guide: how the language works, the functions of `Base` by topic, the standard libraries, and how Julia works inside.",
-    code = "The docstrings of the modules that are loaded now, listed name by name.",
+    docs = "Julia's manual, written as a guide: how the language works, the functions of `Base` by topic, the standard libraries, and how Julia works inside. Then the docstrings of `Core` and `Base`, name by name.",
+    code = "The packages that are loaded now: their manuals, where their source has one, and their docstrings, name by name.",
     manual = "The Julia manual: how the language works and how to use it.",
     basedocs = "The functions, types and macros of `Base`, grouped by topic.",
     stdlibdocs = "The manual pages of the standard libraries. A page lists the names of its library, which become links once the library is loaded.",
@@ -1046,8 +1048,7 @@ function section_page(cat::Catalog, role::Symbol, width::Int)
     pkgs = PkgEntry[p for p in cat.pkgs if p.role === role]
     addline!(pb)
     if role === :docs || role === :code
-        for r in (role === :docs ? (:manual, :basedocs, :stdlibdocs, :devdocs) :
-                                   (:project, :direct, :indirect, :julia, :extension))
+        for r in getfield(BLOCKS, role)
             n = count(p -> p.role === r, cat.pkgs) + count(p -> p.role === r, cat.manual)
             n == 0 && continue
             addline!(pb, "    ", (getfield(SECTION_TITLES, r), nothing, SectionTarget(r)), ("  $n", :REPL_DocBrowser_dim))

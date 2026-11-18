@@ -125,16 +125,17 @@ end
 
 ## Rows ##
 
-# The sidebar has two blocks: the curated documentation, and the docstrings of loaded code.
-# Indirect dependencies are a section inside the dependencies.
-const BLOCKS = (docs = (:manual, :basedocs, :stdlibdocs, :devdocs),
-                code = (:project, :direct, :indirect, :julia, :extension))
+# The sidebar has two blocks: Julia, with its manual and its own modules, and the loaded
+# packages. `Main` is a row of its own after them. Indirect dependencies are a section inside
+# the dependencies.
+const BLOCKS = (docs = (:manual, :basedocs, :stdlibdocs, :devdocs, :julia),
+                code = (:project, :direct, :indirect, :extension))
 const SECTION_ORDER = (:docs, BLOCKS.docs..., :code, BLOCKS.code...)
-const MANUAL_ROLES = BLOCKS.docs
+const MANUAL_ROLES = (:manual, :basedocs, :stdlibdocs, :devdocs)
 const DEFAULT_EXPANDED = (:docs, :code, :project, :direct, :julia)
-const SIDEBAR_TITLES = (docs = "Documentation", code = "Docstrings", manual = "Manual", basedocs = "Base",
+const SIDEBAR_TITLES = (docs = "Julia", code = "Packages", manual = "Manual", basedocs = "Base",
                         stdlibdocs = "Standard library", pkgdocs = "Pkg", devdocs = "Developer docs", project = "Project",
-                        direct = "Dependencies", indirect = "Indirect & stdlib", julia = "Julia",
+                        direct = "Dependencies", indirect = "Indirect & stdlib", julia = "Core and Base",
                         extension = "Extensions")
 
 is_block(role::Symbol) = role === :docs || role === :code
@@ -185,6 +186,9 @@ function refresh_side!(b::Browser)
                 end
             end
         end
+    end
+    for p in b.cat.pkgs
+        p.role === :main && push!(rows, SideRow(:main, p))
     end
     b.side_rows = rows
     # Keep the same row selected. If it is gone, the names pane must follow the new one.
@@ -318,7 +322,7 @@ end
 function unfold_to!(b::Browser, role::Symbol; open::Bool=false)
     is_block(role) && !open && return
     role === :pkgdocs && (role = :stdlibdocs) # Pkg's manual is a row of the standard libraries
-    sections = Symbol[role in MANUAL_ROLES ? :docs : :code]
+    sections = Symbol[role in BLOCKS.docs ? :docs : :code]
     role === :indirect && push!(sections, :direct)
     open && push!(sections, role)
     all(in(b.expanded), sections) && return
@@ -1179,7 +1183,7 @@ function list_line(b::Browser, pane::Symbol, i::Int, x::Int, w::Int, row::Int)
         else
             p = r.pkg
             version = p.version === nothing || p.role === :julia ? "" : string(p.version)
-            put_seg!(rb, p.role === :indirect && has_section(b, :direct) ? "     " : "   ")
+            put_seg!(rb, p.role === :main ? "  " : p.role === :indirect && has_section(b, :direct) ? "     " : "   ")
             put_seg!(rb, p.id.name, isjll(p.id.name) ? :REPL_DocBrowser_dim : nothing, action)
             room = w - width(rb) - 1
             if !isempty(version) && textwidth(version) + 1 <= room

@@ -23,7 +23,7 @@ const DOC_GENERATORS = ("Literate", "DemoCards", "Weave", "PlutoStaticHTML", "Do
 # The manual of the package that module `m` is the top of, if it has one.
 function package_docs(cat::Catalog, m::Module)
     p = get(cat.bymod, m, nothing)
-    (p === nothing || p.role === :extension || p.role === :julia || parentmodule(m) !== m) && return NO_DOCS
+    (p === nothing || p.role in (:extension, :julia, :main) || parentmodule(m) !== m) && return NO_DOCS
     dir = pkgdir(m)
     dir === nothing && return NO_DOCS
     in_stdlib_dir(dir) && return NO_DOCS # the standard libraries are in the manual
