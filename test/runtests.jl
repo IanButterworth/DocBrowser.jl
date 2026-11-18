@@ -956,6 +956,17 @@ end
 
 @testset "searching the manual, and the sidebar" begin
     b = test_browser()
+    # Only the hit picked is highlighted, among hits from many pages.
+    press!(b, '/', "point"...)
+    selected(i) = any(a -> a.value === :REPL_DocBrowser_selected,
+                      Base.annotations(DocBrowser.list_line(b, :names, i, 1, 40, 2)))
+    hits = findall(r -> r.kind === :hit, b.name_rows)
+    @test length(hits) > 3
+    @test all(hits) do i
+        b.names.cursor = i
+        findall(selected, eachindex(b.name_rows)) == [i]
+    end
+    press!(b, :escape)
     # A standard library's page is found by its name, whether an earlier test loaded it or not.
     press!(b, '/', "Profile"...)
     @test isempty(b.manual_hits[1].heading) && DocBrowser.manual_title(b.cat, b.manual_hits[1].path) == "Profile"
@@ -1087,6 +1098,14 @@ end
     frame(b)
     @test occursin("Start", String(DocBrowser.header_bar(b)))
     @test occursin("$(length(DocBrowser.START_SECTIONS)) sections", String(DocBrowser.pane_title(b, :names, 1, 40)))
+    # The last section is too near the end to scroll to, so a mark beside it shows the move.
+    press!(b, :end)
+    w = DocBrowser.doc_width(b)
+    p = DocBrowser.page(b, :start, w)
+    @test b.mark == p.headings[end] && b.doc_scroll < b.mark - 1
+    @test startswith(String(DocBrowser.draw_doc(b, 1, w)[b.mark - b.doc_scroll]), "▶")
+    press!(b, :up)
+    @test b.mark == p.headings[end-1]
     # Every tip in the file is well formed, including those for other systems.
     for t in Base.parsed_toml(joinpath(pkgdir(DocBrowser), "src", "tips.toml"))["tip"]
         @test issubset(keys(t), ("text", "docs", "page", "heading", "os", "julia")) && t["text"] isa String

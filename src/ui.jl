@@ -70,6 +70,7 @@ mutable struct Browser
     override::Any
     doc_key::Any
     doc_scroll::Int
+    mark::Int       # the line of the heading last jumped to, marked so that the jump shows
     link::Int
     pages::Dict{Tuple{Any,Int,Vector{Symbol}},Page}
     back::Vector{Snapshot}
@@ -110,7 +111,7 @@ function Browser(term::REPL.Terminals.TextTerminal, cat::Catalog=Catalog())
     b = Browser(term, term.in_stream, term.out_stream, cat, h, w, :side, :side,
                 ListState(1, 0), ListState(1, 0), SideRow[], NameRow[],
                 Set(DEFAULT_EXPANDED), Set{Symbol}(), Main, false, nothing, false,
-                NameEntry[], nothing, nothing, 0, 0, Dict{Tuple{Any,Int,Vector{Symbol}},Page}(),
+                NameEntry[], nothing, nothing, 0, 0, 0, Dict{Tuple{Any,Int,Vector{Symbol}},Page}(),
                 Snapshot[], Snapshot[], Hit[], nothing, "", false, false, nothing, String[],
                 (0.0, nothing), ReentrantLock(), Dict{Any,Set{Symbol}}(), false, LAYOUT[],
                 get(term.out_stream, :color, true)::Bool || REPL.Terminals.hascolor(term),
@@ -510,6 +511,7 @@ function follow!(b::Browser, t::Target)
         p = page(b, current_key(b), doc_width(b))
         t.heading in eachindex(p.headings) || return
         b.doc_scroll = p.headings[t.heading] - 1
+        b.mark = p.headings[t.heading]
         b.focus = :doc
         b.link = 0
     elseif t isa ToggleTarget
@@ -905,12 +907,12 @@ function hint_segments(b::Browser)
         isempty(p.headings) || push!(hints, ("{ }", "headings"))
         any(s -> s.target == ToggleTarget(:extended), p.spots) && push!(hints, ("x", "extended"))
         current_key(b) === :start && push!(hints, ("t T", "tips"))
-        return vcat(narrow, hints, [("/", "search"), ("y", "insert"), ("e", "source"), ("c", "link")])
+        return vcat(narrow, hints, [("/", "search"), ("y", "to prompt"), ("e", "source"), ("c", "link")])
     else
         # On a narrow terminal the layout matters most, so it comes first.
         return vcat(narrow, [("↑↓", "move"), ("⏎", "open"), ("←→", "panes"), ("/", "search"),
                      ("i", b.internal ? "hide internal" : "internal"), ("[ ]", "back/forward"),
-                     ("y", "insert")])
+                     ("y", "to prompt")])
     end
 end
 
@@ -1055,7 +1057,8 @@ function footer_bar(b::Browser)
             Seg("public"), Seg(" · ", :REPL_DocBrowser_internal), Seg("internal ")] :
         Seg[Seg(" E "), Seg("exported"), Seg(" P "), Seg("public"), Seg(" - "), Seg("internal ")]
     lw = segs_width(legend)
-    if !b.help && b.width - width(rb) > lw + 2
+    # Each hint ends in two spaces, which keep the legend apart from them.
+    if !b.help && b.width - width(rb) >= lw
         put_seg!(rb, ' '^(b.width - width(rb) - lw))
         put_segs!(rb, legend)
     end
@@ -1260,9 +1263,9 @@ function list_line(b::Browser, pane::Symbol, i::Int, x::Int, w::Int, row::Int)
             h = r.hit::ManualHit
             put_seg!(rb, " § ", :REPL_DocBrowser_kind_module)
             put_match!(rb, hit_title(b.cat, h), nothing, action)
-            i = manual_page_of(b.cat, h.path)
+            k = manual_page_of(b.cat, h.path)
             where = !isempty(h.heading) ? " " * manual_title(b.cat, h.path) :
-                i === nothing ? "" : " " * getfield(SIDEBAR_TITLES, b.cat.manual[i].role)
+                k === nothing ? "" : " " * getfield(SIDEBAR_TITLES, b.cat.manual[k].role)
             if !isempty(where)
                 room = w - width(rb) - 1
                 if room > 4
@@ -1418,6 +1421,7 @@ function draw_doc(b::Browser, x::Int, w::Int)
         key === :help && (b.under_help = (b.doc_key, b.doc_scroll, b.link))
         b.doc_key = key
         b.doc_scroll, b.link = under !== nothing && under[1] == key ? (under[2], under[3]) : (0, 0)
+        b.mark = 0
         key === :help || (b.under_help = nothing)
         # What was under the pointer, and what was selected, belonged to the old page.
         b.hover = nothing
@@ -1439,6 +1443,8 @@ function draw_doc(b::Browser, x::Int, w::Int)
         li = b.doc_scroll + k
         line = li <= length(p.lines) ? copy_line(p.lines[li]) : AnnotatedString("")
         b.textsearch && b.query !== nothing && mark_words!(line, b.query)
+        li == b.mark && startswith(String(line), ' ') &&
+            (line = annotatedstring(styled("▶", :REPL_DocBrowser_key), line[2:end]))
         for (si, s) in enumerate(p.spots)
             s.line == li || continue
             face_cols!(line, s.cols, si == b.link ? :REPL_DocBrowser_link_active : :REPL_DocBrowser_link)
@@ -2034,11 +2040,14 @@ function scroll_to_heading!(b::Browser, k::Int)
     p = page(b, key, doc_width(b))
     b.doc_key = key # so that drawing does not scroll back to the top
     b.doc_scroll = k in eachindex(p.headings) ? p.headings[k] - 1 : 0
+    # Near the end of a page it cannot scroll that far, so the heading is marked instead.
+    b.mark = k in eachindex(p.headings) ? p.headings[k] : 0
     b.link = 0
 end
 
 function scroll_doc!(b::Browser, delta::Int)
     b.doc_scroll = max(0, b.doc_scroll + delta)
+    b.mark = 0
 end
 
 function cycle_link!(b::Browser, dir::Int)
@@ -2187,9 +2196,12 @@ end
 
 function jump_heading!(b::Browser, dir::Int)
     p = page(b, current_key(b), doc_width(b))
-    hs = dir > 0 ? filter(>(b.doc_scroll + 1), p.headings) : filter(<(b.doc_scroll + 1), p.headings)
+    # From the marked heading, which can be below the top near the end of a page.
+    at = b.mark > 0 ? b.mark : b.doc_scroll + 1
+    hs = dir > 0 ? filter(>(at), p.headings) : filter(<(at), p.headings)
     isempty(hs) && return (b.status = "No more headings"; nothing)
-    b.doc_scroll = (dir > 0 ? first(hs) : last(hs)) - 1
+    b.mark = dir > 0 ? first(hs) : last(hs)
+    b.doc_scroll = b.mark - 1
     b.focus = :doc
 end
 
