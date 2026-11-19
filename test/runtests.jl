@@ -96,6 +96,8 @@ strip_ansi(s) = replace(s, r"\e\[[0-9;?]*[a-zA-Z]|\e\]8;[^\e]*\e\\\\" => "")
     @test ev("\e[<65;3;4M") == MouseEvent(:wheeldown, 0, 4, 3, 0)
     @test ev("\e[<128;3;4M") == MouseEvent(:press, 8, 4, 3, 0)
     @test ev("\e[200~some text\e[201~") == PasteEvent("some text")
+    # A paste whose end marker is lost ends when no more input comes.
+    @test DocBrowser.read_paste(IOBuffer("some text"), 0.01) == PasteEvent("some text")
     # Replies to terminal queries are skipped.
     @test ev("\e]11;rgb:0000/0000/0000\e\\") === nothing
     @test ev("\e[?62;22c") === nothing
