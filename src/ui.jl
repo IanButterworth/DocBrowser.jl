@@ -104,6 +104,7 @@ mutable struct Browser
     card::Union{Nothing,Tuple{Vector{AnnotatedString{String}},Any}}
     tips::Vector{Int}            # the tips in the order they are shown, shuffled for each browser
     tip::Int                     # which of them the start page shows
+    live::Bool                   # whether it is on the screen, taking input
 end
 
 function Browser(term::REPL.Terminals.TextTerminal, cat::Catalog=Catalog())
@@ -116,7 +117,7 @@ function Browser(term::REPL.Terminals.TextTerminal, cat::Catalog=Catalog())
                 (0.0, nothing), ReentrantLock(), Dict{Any,Set{Symbol}}(), false, LAYOUT[],
                 get(term.out_stream, :color, true)::Bool || REPL.Terminals.hascolor(term),
                 nothing, false, (0.0, 0.0, 0.0, 0.0), nothing, ManualHit[], SEARCH_INDIRECT[], 0, (0, 0), Inf, nothing,
-                tip_order(), 1)
+                tip_order(), 1, false)
     any(p -> p.role in (:project, :direct), cat.pkgs) || push!(b.expanded, :indirect)
     refresh_side!(b)
     b.side.cursor = 1 # the start page
@@ -494,11 +495,7 @@ function show_module!(b::Browser, m::Module; entry::Union{Nothing,Symbol}=nothin
         end
     end
     if i === nothing
-        e = try
-            classify(b.cat, m, entry)
-        catch
-            nothing
-        end
+        e = @attempt classify(b.cat, m, entry)
         b.override = something(e, ModuleTarget(m))
     else
         b.names.cursor = i
@@ -615,7 +612,8 @@ function open_url(b::Browser, url::String)
     try
         URL_OPENER[](url)
         b.status = "Opened " * url
-    catch
+    catch err
+        err isa InterruptException && rethrow()
         b.status = "Could not open " * url
     end
 end
@@ -634,6 +632,7 @@ function suspend(f, b::Browser)
         f()
         return true
     catch err
+        err isa InterruptException && rethrow()
         b.status = "Error: " * first_line(err)
         return false
     finally
@@ -810,6 +809,7 @@ function page(b::Browser, key, width::Int)
             key === :start ? start_page(b.cat, width, b.tips[b.tip], b.tip) :
             key === :help ? help_page(b.cat, width) : Page(PageBuilder(width))
         catch err
+            err isa InterruptException && rethrow()
             pb = PageBuilder(width)
             addline!(pb)
             addline!(pb, "  ", ("Could not show this page:", :error))
@@ -1545,11 +1545,11 @@ end
 const ENTER_SCREEN = "\e[?1049h\e[?25l\e[?7l\e[?1000h\e[?1002h\e[?1003h\e[?1006h\e[?2004h\e[H\e[2J"
 const LEAVE_SCREEN = "\e[?2004l\e[?1006l\e[?1003l\e[?1002l\e[?1000l\e[?7h\e[?25h\e[?1049l"
 
+# Only a console has a raw mode, and only while it is open.
 function set_raw(b::Browser, raw::Bool)
-    try
-        REPL.Terminals.raw!(b.term, raw)
-    catch
-    end
+    b.term isa REPL.Terminals.TTYTerminal && !(b.in isa Base.TTY && isopen(b.in)) && return
+    REPL.Terminals.raw!(b.term, raw)
+    return
 end
 
 function enter_screen(b::Browser)
@@ -1640,11 +1640,7 @@ end
 function card_content(b::Browser, @nospecialize(subject))
     if subject isa NameEntry || subject isa NameTarget
         m, s = subject isa NameEntry ? (subject.mod, subject.name) : (subject.mod, subject.name)
-        e = subject isa NameEntry ? subject : try
-            classify(b.cat, m, s)
-        catch
-            nothing
-        end
+        e = subject isa NameEntry ? subject : @attempt(classify(b.cat, m, s))
         kind = e === nothing ? "" : String(e.kind)
         return string(display_name(m), '.', s), kind, docstring_start(doc_results(Binding(m, s)))
     elseif subject isa ModuleTarget
@@ -1677,11 +1673,7 @@ md_blocks(md::Markdown.MD) = mapreduce(x -> x isa Markdown.MD ? md_blocks(x) : A
 
 # The first paragraph of the section of a manual page under its `k`th shown heading.
 function section_start(path::String, k::Int)
-    md = try
-        Markdown.parse(read(path, String))
-    catch
-        return nothing
-    end
+    md = @attempt Markdown.parse(read(path, String)) return nothing
     seen = 0
     for x in md_blocks(md)
         if x isa Markdown.Header
@@ -1701,6 +1693,14 @@ function show_card!(b::Browser)
     subject === nothing && return false
     b.card = (card_lines(b, subject, card_width(b) - 4), subject)
     return true
+end
+
+# The pointer came to rest on something. Its card shows after a moment, if the pointer is
+# still there then.
+function rest_pointer!(b::Browser)
+    b.hover_since = time()
+    b.live && Timer(_ -> tick(b), CARD_DELAY + 0.01)
+    return
 end
 
 function hide_card!(b::Browser)
@@ -1881,11 +1881,8 @@ the text goes to the terminal instead, as an OSC 52 sequence.
 """
 function copy_to_clipboard(b::Browser, text::String)
     if !haskey(ENV, "SSH_CONNECTION")
-        try
-            InteractiveUtils.clipboard(text)
-            return "to the clipboard"
-        catch
-        end
+        # With no clipboard program, as on a server, the terminal is asked instead.
+        @attempt (InteractiveUtils.clipboard(text); return "to the clipboard")
     end
     write(b.out, "\e]52;c;", base64encode(text), "\a")
     return "through the terminal"
@@ -2077,7 +2074,7 @@ function cycle_link!(b::Browser, dir::Int)
         pane === :doc || continue
         b.hover = (:spot, b.link)
         b.hover_at = (line - b.doc_scroll + 2, x + first(p.spots[b.link].cols) - 1)
-        b.hover_since = time()
+        rest_pointer!(b)
     end
 end
 
@@ -2466,7 +2463,7 @@ function handle!(b::Browser, ev::MouseEvent)
         hide_card!(b)
         b.hover = hover
         b.hover_at = (ev.row, ev.col)
-        b.hover_since = time()
+        rest_pointer!(b)
         return true
     elseif ev.action in (:wheelup, :wheeldown)
         hide_card!(b)
@@ -2717,11 +2714,11 @@ function reopen!(b::Browser)
     last = LAST[]
     last === nothing && return
     mod, name, focus = last
-    try
+    # The module may be gone since, or no longer have the name.
+    @attempt begin
         show_module!(b, mod; entry = name)
         b.focus = focus
         focus === :side && (b.source = :side)
-    catch
     end
 end
 
@@ -2729,7 +2726,8 @@ function await_release(io::IO)
     while true
         ev = try
             read_event(io)
-        catch
+        catch err
+            err isa EOFError || rethrow()
             return
         end
         ev isa MouseEvent && ev.action in (:drag, :move) && continue
@@ -2742,14 +2740,14 @@ end
 function drain_mouse(io::IO)
     try
         while wait_bytes(io, 0.05)
-            bytesavailable(io) < 3 && (sleep(0.03); bytesavailable(io) < 3) && return
             mark(io)
-            is_mouse = read(io, 3) == b"\e[<"
+            is_mouse = all(c -> wait_bytes(io, 0.03) && read(io, UInt8) == c, b"\e[<")
             reset(io)
             is_mouse || return
             read_event(io)
         end
-    catch
+    catch err
+        err isa EOFError || rethrow()
     end
 end
 
@@ -2776,21 +2774,36 @@ function download_manual!(b::Browser)
         end
     end
     # so that the sidebar and the Manual section show that it is downloading
-    empty!(b.pages)
-    refresh_side!(b)
+    @lock b.lock begin
+        empty!(b.pages)
+        refresh_side!(b)
+    end
+end
+
+# Draw again if the terminal has changed size, or it is time for a card to show.
+function tick(b::Browser)
+    @lock b.lock try
+        # Packages loaded from the browser are only visible in the latest world.
+        b.quit || ((check_size!(b) | Base.invokelatest(show_card!, b)) && Base.invokelatest(draw, b))
+    catch err
+        # shown by the next draw, as for a key that fails
+        b.status = "Error: " * first_line(err)
+    end
+    return
+end
+
+# Call `f` when the terminal changes size. Julia tells of this from 1.14; before that the
+# size is looked at 20 times a second.
+@static if isdefined(Base, :SignalCondition)
+    watch_resize(f) = Base.SignalCondition(_ -> f(), Base.SIGWINCH)
+else
+    watch_resize(f) = Timer(_ -> f(), 0.05; interval=0.05)
 end
 
 function run_screen!(b::Browser)
     enter_screen(b)
-    timer = Timer(0.05; interval=0.05) do _
-        try
-            @lock b.lock begin
-                # Packages loaded from the browser are only visible in the latest world.
-                b.quit || ((check_size!(b) | Base.invokelatest(show_card!, b)) && Base.invokelatest(draw, b))
-            end
-        catch
-        end
-    end
+    b.live = true
+    timer = watch_resize(() -> tick(b))
     try
         @lock b.lock draw(b)
         while !b.quit
@@ -2816,8 +2829,8 @@ function run_screen!(b::Browser)
             b.quit && ev isa MouseEvent && ev.action === :press && await_release(b.in)
         end
     finally
-        # Stop the timer drawing, also when leaving on an error.
-        @lock b.lock b.quit = true
+        # Stop anything else drawing, also when leaving on an error.
+        @lock b.lock (b.quit = true; b.live = false)
         close(timer)
         # Pointer moves are reported until the terminal sees the end of mouse reporting,
         # so some may still be on their way, however the browser was closed.

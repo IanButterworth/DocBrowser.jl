@@ -19,11 +19,7 @@ function manual_pages(dir::String=manual_dir())
     pages = ManualPage[]
     toml = joinpath(dir, "pages.toml")
     isfile(toml) || return pages
-    d = try
-        Base.parsed_toml(toml)
-    catch
-        return pages
-    end
+    d = @attempt Base.parsed_toml(toml) return pages
     for (key, role) in (("manual", :manual), ("base", :basedocs))
         for rel in get(d, key, String[])
             add_manual_page!(pages, joinpath(dir, rel), role, "")
@@ -227,11 +223,7 @@ headings of the rendered page, which the names pane and links scroll to.
 function page_headings(cat::Catalog, path::String)
     get!(cat.headings, path) do
         isfile(path) || return Heading[]
-        md = try
-            Markdown.parse(read(path, String))
-        catch
-            return Heading[]
-        end
+        md = @attempt Markdown.parse(read(path, String)) return Heading[]
         headings = Heading[]
         walk_md(md) do x
             x isa Markdown.Header || return

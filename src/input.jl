@@ -37,15 +37,10 @@ const SHIFT, ALT, CTRL = 1, 2, 4
 
 function wait_bytes(io::IO, timeout::Float64)
     bytesavailable(io) > 0 && return true
-    # A terminal stops being read once a read has what it asked for, so later bytes of an
-    # escape sequence would not arrive while we wait.
-    io isa Base.LibuvStream && Base.start_reading(io)
-    t = time()
-    while time() - t < timeout
-        sleep(0.002)
-        bytesavailable(io) > 0 && return true
-    end
-    return false
+    # Asking whether the input has ended waits for the next byte without taking it. Once the
+    # input has ended there is nothing more to wait for.
+    ended = Ref(false)
+    return within(() -> ended[] = eof(io), timeout) && !ended[]
 end
 
 # The modifier parameter of a CSI sequence is 1 + (shift | alt<<1 | ctrl<<2).

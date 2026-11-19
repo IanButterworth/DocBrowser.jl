@@ -5,8 +5,15 @@ const JULIA_RAW = "https://raw.githubusercontent.com/JuliaLang/julia"
 
 # Loaded only when the manual is downloaded, since it brings in libcurl and OpenSSL.
 const DOWNLOADS = PkgId(UUID("f43a241f-c20a-4ad4-852c-f6b1247861c6"), "Downloads")
-download_url(url, out) = Base.invokelatest(Base.require_stdlib(DOWNLOADS).download, url, out)
-is_not_found(err) = err isa Base.require_stdlib(DOWNLOADS).RequestError && err.response.status == 404
+# Exit hooks run last first. The one that waits for a download must run before the one that
+# closes the downloader, so it is set once the downloader is loaded.
+const downloader = OncePerProcess{Module}() do
+    m = Base.require_stdlib(DOWNLOADS)
+    atexit(wait_for_download)
+    return m
+end
+download_url(url, out) = Base.invokelatest(downloader().download, url, out)
+is_not_found(err) = err isa downloader().RequestError && err.response.status == 404
 
 julia_ref() = (c = Base.GIT_VERSION_INFO.commit; isempty(c) ? "v$VERSION" : c)
 
@@ -101,8 +108,9 @@ function download_manual(; force::Bool=false)
             # a page that is missing is left out, as when it is not installed
             try
                 download_url("$base/doc/src/$rel", path)
-            catch
+            catch err
                 rm(path; force=true)
+                is_not_found(err) || rethrow()
             end
         end
         # The release notes are at the top of the repository; the docs build copies them in.
@@ -124,42 +132,55 @@ const MANUAL_DOWNLOAD = Ref{Union{Nothing,Task}}(nothing)
 const MANUAL_ERROR = Ref{Union{Nothing,String}}(nothing)
 # What to call when the running download ends: one for each browser that asked for it.
 const MANUAL_WAITERS = Any[]
-const WAIT_AT_EXIT = Ref(false)
+const DOWNLOADING = Ref(false)
+# The download runs on another thread, so all of the above is read and changed under this.
+const DOWNLOAD_LOCK = ReentrantLock()
 
 # Start downloading the manual in the background, unless it is being downloaded, and call
 # `on_done` when it is done or has failed. A download that fails can be tried again.
 function start_manual_download(on_done)
-    push!(MANUAL_WAITERS, on_done)
-    t = MANUAL_DOWNLOAD[]
-    t === nothing || istaskdone(t) || return nothing
-    MANUAL_ERROR[] = nothing
-    WAIT_AT_EXIT[] || (WAIT_AT_EXIT[] = true; atexit(wait_for_download))
-    MANUAL_DOWNLOAD[] = @async begin
-        try
-            download_manual()
-        catch err
-            @debug "Downloading the manual failed" exception=(err, catch_backtrace())
-            MANUAL_ERROR[] = first_line(err)
-            MANUAL_DOWNLOAD[] = nothing
-        end
-        while !isempty(MANUAL_WAITERS)
-            Base.invokelatest(popfirst!(MANUAL_WAITERS))
-        end
+    @lock DOWNLOAD_LOCK begin
+        push!(MANUAL_WAITERS, on_done)
+        DOWNLOADING[] && return nothing
+        DOWNLOADING[] = true
+        MANUAL_ERROR[] = nothing
+        downloader()
+        MANUAL_DOWNLOAD[] = errormonitor(Threads.@spawn run_manual_download())
     end
     return nothing
 end
 
+function run_manual_download()
+    failure = try
+        download_manual()
+        nothing
+    catch err
+        @debug "Downloading the manual failed" exception=(err, catch_backtrace())
+        first_line(err)
+    end
+    @lock DOWNLOAD_LOCK MANUAL_ERROR[] = failure
+    while true
+        # The download is over only once nobody is left to tell, so that nobody is missed.
+        on_done = @lock DOWNLOAD_LOCK begin
+            isempty(MANUAL_WAITERS) && (DOWNLOADING[] = false; break)
+            popfirst!(MANUAL_WAITERS)
+        end
+        Base.invokelatest(on_done)
+    end
+end
+
 # `:downloading`, `:failed`, or `:none` when no download has run or the last one worked.
 function manual_status()
-    MANUAL_ERROR[] === nothing || return :failed
-    t = MANUAL_DOWNLOAD[]
-    return t === nothing || istaskdone(t) ? :none : :downloading
+    @lock DOWNLOAD_LOCK begin
+        MANUAL_ERROR[] === nothing || return :failed
+        return DOWNLOADING[] ? :downloading : :none
+    end
 end
 
 # Julia can crash if it exits while a download is running, so a running one gets a few seconds
 # to finish first.
 function wait_for_download()
-    t = MANUAL_DOWNLOAD[]
-    t === nothing || istaskdone(t) || timedwait(() -> istaskdone(t), 5.0)
+    t = @lock DOWNLOAD_LOCK MANUAL_DOWNLOAD[]
+    t === nothing || istaskdone(t) || within(() -> wait(t), 5.0)
     return nothing
 end

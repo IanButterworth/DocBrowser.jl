@@ -1229,6 +1229,15 @@ end
     entry = b.name_rows[h.action[2]].entry
     @test occursin(String(entry.name), String(b.card[1][1]))
     @test any(r -> occursin("╭", r), frame(b))
+    # On the screen, the card shows by itself a moment after the pointer comes to rest.
+    live = test_browser()
+    DocBrowser.follow!(live, NameTarget(Base, :sort!))
+    frame(live)
+    live.live = true
+    handle!(live, MouseEvent(:move, 0, h.row, first(h.cols) + 1, 0))
+    @test live.card === nothing
+    @test timedwait(() -> live.card !== nothing, 10) === :ok
+    live.live = false
     # Moving onto the card keeps it; right-click on it is its source; a click opens it.
     c = first(h for h in b.hits if h.action == (:card,))
     handle!(b, MouseEvent(:move, 0, c.row, first(c.cols) + 1, 0))
@@ -1458,6 +1467,9 @@ end
     DocBrowser.URL_OPENER[] = url -> error("no browser")
     DocBrowser.follow!(b, DocBrowser.URLTarget("https://example.org"))
     @test occursin("Could not open", b.status)
+    # An interrupt is not such a failure.
+    DocBrowser.URL_OPENER[] = url -> throw(InterruptException())
+    @test_throws InterruptException DocBrowser.follow!(b, DocBrowser.URLTarget("https://example.org"))
     DocBrowser.EDITOR[] = (f, l) -> error("no editor")
     DocBrowser.follow!(b, DocBrowser.SourceTarget(@__FILE__, 1))
     @test occursin("no editor", b.status)
