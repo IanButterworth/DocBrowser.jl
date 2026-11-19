@@ -114,6 +114,9 @@ mutable struct Browser
     # Where loads are sent to run on the thread that opened the browser, while the browser
     # runs on another, or `nothing` when they run where they are started.
     loads::Union{Nothing,Channel{Task}}
+    # Shown over the page while a package is being loaded into the session, when the browser
+    # stops responding, or "".
+    modal::String
     # The world that keys and drawing run in. It moves on only when a package that the browser
     # loaded is done: in the latest world, each method that loading adds makes the browser's
     # calls look up their methods again, which waits for the loading to let go of the method
@@ -140,7 +143,7 @@ function Browser(term::REPL.Terminals.TextTerminal, cat::Catalog=Catalog())
                 (0.0, nothing), ReentrantLock(), Dict{Any,Set{Symbol}}(), false, LAYOUT[],
                 get(term.out_stream, :color, true)::Bool || REPL.Terminals.hascolor(term),
                 nothing, false, (0.0, 0.0, 0.0, 0.0), nothing, ManualHit[], SEARCH_INDIRECT[], 0, (0, 0), Inf, nothing,
-                tip_order(), 1, false, nothing, nothing, "", nothing, nothing, Base.get_world_counter(),
+                tip_order(), 1, false, nothing, nothing, "", nothing, nothing, "", Base.get_world_counter(),
                 0, "", terminal_theme(), nothing, browser_faces(terminal_theme(), nothing))
     any(p -> p.role in (:project, :direct), cat.pkgs) || push!(b.expanded, :indirect)
     refresh_side!(b)
@@ -677,8 +680,25 @@ function load_package!(b::Browser, id::PkgId)
     loading(b) && return (b.status = "Already " * lowercasefirst(b.loading); nothing)
     b.console = ["julia> import " * id.name]
     # Loading prints nothing while it precompiles, which can take minutes, so say so.
-    what = (Base.isprecompiled(id) ? "Loading " : "Precompiling ") * id.name
-    load() = Core.eval(Main, Expr(:import, Expr(:., Symbol(id.name))))
+    precompiled = Base.isprecompiled(id)
+    what = Ref((precompiled ? "Loading " : "Precompiling ") * id.name)
+    function load()
+        # Precompiling first, as the import would, runs in other processes, and the browser
+        # keeps working meanwhile. Without this internal function the import does it.
+        precompiled || try
+            Base.Precompilation.precompilepkgs([id]; _from_loading=true, ignore_loaded=false)
+        catch err
+            err isa MethodError || rethrow()
+        end
+        # Loading into the session holds locks that the browser's own calls wait for, so it
+        # stops responding until the package is loaded. It says so before it does.
+        @lock b.lock begin
+            what[] = "Loading " * id.name
+            b.modal = what[] * "…"
+            b.live && in_world(draw, b)
+        end
+        Core.eval(Main, Expr(:import, Expr(:., Symbol(id.name))))
+    end
     function done(ok)
         ok || return
         b.console = nothing
@@ -707,9 +727,9 @@ end
 # Run `f` in a task, with what it prints shown in the console panel as it comes, and then
 # `done(ok)` with the browser's lock held. Output is redirected for the whole process, which is
 # why only one runs at a time and the browser does not close while it runs.
-function in_console(f, done, b::Browser, what::String)
+function in_console(f, done, b::Browser, what::Ref{String})
     t0 = time()
-    b.loading = what * "…"
+    b.loading = what[] * "…"
     pipe = Pipe()
     Base.link_pipe!(pipe; reader_supports_async=true, writer_supports_async=true)
     redraw() = try
@@ -721,7 +741,7 @@ function in_console(f, done, b::Browser, what::String)
         @lock b.lock (push!(b.console, console_text(line)); redraw())
     end
     clock = Timer(1; interval=1) do _
-        @lock b.lock (b.loading = string(what, "… ", round(Int, time() - t0), " s"); redraw())
+        @lock b.lock (b.loading = string(what[], "… ", round(Int, time() - t0), " s"); redraw())
     end
     t = @task begin
         ok = false
@@ -741,6 +761,7 @@ function in_console(f, done, b::Browser, what::String)
             wait(reader)
             @lock b.lock begin
                 b.loading = ""
+                b.modal = ""
                 try
                     done(ok)
                 catch err
@@ -1620,6 +1641,7 @@ function frame(b::Browser)
     styled_rows[H] = footer_bar(b)
     overlay_card!(b, styled_rows)
     overlay_console!(b, styled_rows)
+    overlay_modal!(b, styled_rows)
     for r in 1:H
         rows[r] = ansi(styled_rows[r], b.color)
     end
@@ -1877,6 +1899,23 @@ function overlay_console!(b::Browser, rows::Vector{AnnotatedString{String}})
         r <= b.height - 1 || continue
         rows[r] = piece
         push!(b.hits, Hit(r, 1:w, (:console,)))
+    end
+end
+
+# The notice that a package is being loaded, over the middle of the screen.
+function overlay_modal!(b::Browser, rows::Vector{AnnotatedString{String}})
+    isempty(b.modal) && return
+    text = "   " * b.modal * "   "
+    w = textwidth(text) + 2
+    left = max(1, (b.width - w) ÷ 2 + 1)
+    top = max(2, b.height ÷ 2 - 1)
+    border = :REPL_DocBrowser_border
+    box = [styled("╭" * "─"^(w - 2) * "╮", border),
+           annotatedstring(styled("│", border), styled(text, :REPL_DocBrowser_title), styled("│", border)),
+           styled("╰" * "─"^(w - 2) * "╯", border)]
+    for (i, piece) in enumerate(box)
+        r = top + i - 1
+        r <= b.height - 1 && (rows[r] = splice_cols(rows[r], left, piece))
     end
 end
 

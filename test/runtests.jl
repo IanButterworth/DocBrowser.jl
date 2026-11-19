@@ -356,6 +356,8 @@ end
             @test !b.quit && occursin("can close once it is done", b.status)
             wait(b.load_task)
             @test Base.root_module_exists(id)
+            # Once precompiled, it is loaded under a notice over the page, gone when it is done.
+            @test occursin("│   Loading $name…   │", strip_ansi(String(take!(b.out.io)))) && isempty(b.modal)
             @test b.console === nothing && isempty(b.loading)
             @test length(b.cat.unloaded) == 1
             @test DocBrowser.current_key(b) == ModuleTarget(Base.root_module(id))
