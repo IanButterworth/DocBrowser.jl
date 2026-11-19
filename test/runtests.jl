@@ -322,6 +322,7 @@ end
         write(joinpath(dir, link, "src", "$link.jl"), "module $link\nexport hello\n\"Says hello.\"\nhello() = 1\nend\n")
         mkpath(joinpath(dir, link, "docs", "src"))
         write(joinpath(dir, link, "docs", "src", "index.md"), "# $link\n\n```@docs\nhello\n```\n")
+        write(joinpath(dir, link, "README.md"), "# $link\n\nA package to read about before loading it.\n")
         env = joinpath(dir, "env")
         mkpath(env)
         write(joinpath(env, "Project.toml"), "[deps]\n$name = \"$uuid\"\n$bad = \"$baduuid\"\n$link = \"$linkuuid\"\n")
@@ -349,10 +350,15 @@ end
             b.side.cursor = row - 1
             DocBrowser.move!(b, :side, 1)
             @test DocBrowser.current_key(b) == DocBrowser.LoadTarget(id)
-            # The names of the module shown before are not listed under it.
-            @test occursin("not loaded", String(DocBrowser.pane_title(b, :names, 1, 40)))
+            # The names of the module shown before are not listed under it, but a row saying it
+            # is not loaded, which → moves to as for any package.
+            @test occursin("$name  not loaded", String(DocBrowser.pane_title(b, :names, 1, 40)))
             listed = String.(DocBrowser.draw_list(b, :names, 1, 40))
-            @test occursin("load it", listed[1]) && all(isempty ∘ strip, listed[2:end])
+            @test all(isempty ∘ strip, listed)
+            b.focus = :side
+            handle!(b, KeyEvent(:right))
+            @test b.focus === :names && DocBrowser.current_key(b) == DocBrowser.LoadTarget(id)
+            # and where ⏎ loads it, as on its row in the contents
             b.live = true
             handle!(b, KeyEvent(:enter))
             # It loads in a task, in a panel that says it is precompiling, and the browser can
@@ -392,6 +398,19 @@ end
             @test Threads.threadid(t) == Threads.threadid()
             b.loads = nothing
             handle!(b, KeyEvent('j'))
+            # A package that is not loaded shows what its source documents: its README, and its
+            # manual's pages and the names they list, which load it when picked.
+            lid = Base.PkgId(linkuuid, link)
+            page = join(String.(DocBrowser.page(b, DocBrowser.LoadTarget(lid), 80).lines), '\n')
+            @test occursin("read about before loading it", page) && occursin("Load $link", page)
+            row = findfirst(r -> r.unloaded == lid, b.side_rows)
+            b.side.cursor = row - 1
+            DocBrowser.move!(b, :side, 1)
+            kinds = [r.kind for r in b.name_rows]
+            @test :pkgpage in kinds && DocBrowser.LoadTarget(lid, "$link.hello") in [r.target for r in b.name_rows]
+            index = only(r for r in b.name_rows if r.kind === :pkgpage).hit.path
+            shown = join(String.(DocBrowser.page(b, DocBrowser.ManualTarget(index, ""), 80).lines), '\n')
+            @test occursin("$link is not loaded", shown)
             # A search finds the names that the manual of a package that is not loaded lists.
             foreach(c -> handle!(b, KeyEvent(c)), "/hello")
             i = findfirst(r -> r.kind === :unloaded, b.name_rows)
@@ -414,6 +433,15 @@ end
     end
 end
 
+@testset "READMEs without their badges" begin
+    mktempdir() do dir
+        path = joinpath(dir, "README.md")
+        write(path, "# Pkg\n\n[![][ci-img]][ci-url] [![][docs-img]][docs-url]\n\nWhat it does.\n\n[ci-img]: https://example.org/ci.svg\n[ci-url]: https://example.org/ci\n")
+        text = sprint(show, MIME("text/plain"), DocBrowser.readme_markdown(path))
+        @test occursin("What it does.", text) && !occursin("ci-img", text) && !occursin("example.org", text)
+    end
+end
+
 @testset "repository links" begin
     @test DocBrowser.web_url("git@github.com:JuliaLang/Foo.jl.git") == "https://github.com/JuliaLang/Foo.jl"
     @test DocBrowser.web_url("https://gitlab.com/a/b.git/") == "https://gitlab.com/a/b"
@@ -432,7 +460,7 @@ end
         @test DocBrowser.repo_url(id, dir) == "https://github.com/someone/NotARealPackage.jl"
     end
     # Without a repository, the page offers a web search for the package.
-    p = DocBrowser.unloaded_page(id, 70)
+    p = DocBrowser.unloaded_page(Catalog(), id, 70)
     @test DocBrowser.URLTarget("https://duckduckgo.com/?q=NotARealPackage.jl") in [s.target for s in p.spots]
     @test any(l -> occursin("NotARealPackage.jl", String(l)), p.lines)
 end
