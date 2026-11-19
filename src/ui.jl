@@ -154,7 +154,7 @@ end
 # The loaded standard library that a page of the standard library's manual is for.
 function stdlib_package(b::Browser, page::ManualPage)
     page.role in (:stdlibdocs, :pkgdocs) || return nothing
-    name = page.role === :pkgdocs ? "Pkg" : basename(dirname(dirname(dirname(page.path))))
+    name = page.role === :pkgdocs ? "Pkg" : stdlib_name(page.path)
     i = findfirst(p -> p.id.name == name && p.role !== :extension && Base.is_stdlib(p.id), b.cat.pkgs)
     return i === nothing ? nothing : b.cat.pkgs[i]
 end
@@ -634,7 +634,7 @@ function suspend(f, b::Browser)
         f()
         return true
     catch err
-        b.status = "Error: " * first(split(sprint(showerror, err), '\n'))
+        b.status = "Error: " * first_line(err)
         return false
     finally
         enter_screen(b)
@@ -2806,7 +2806,7 @@ function run_screen!(b::Browser)
                     Base.invokelatest(handle!, b, ev)
                 catch err
                     err isa InterruptException && rethrow()
-                    b.status = "Error: " * first(split(sprint(showerror, err), '\n'))
+                    b.status = "Error: " * first_line(err)
                     true
                 end
                 changed && !b.quit && Base.invokelatest(draw, b)

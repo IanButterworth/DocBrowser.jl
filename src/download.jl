@@ -139,7 +139,7 @@ function start_manual_download(on_done)
             download_manual()
         catch err
             @debug "Downloading the manual failed" exception=(err, catch_backtrace())
-            MANUAL_ERROR[] = first(split(sprint(showerror, err), '\n'))
+            MANUAL_ERROR[] = first_line(err)
             MANUAL_DOWNLOAD[] = nothing
         end
         while !isempty(MANUAL_WAITERS)

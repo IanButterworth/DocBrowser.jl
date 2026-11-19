@@ -136,7 +136,8 @@ function page_package(cat::Catalog, path::String)
         p.role === :extension && continue
         dir = pkgdir(p.mod)
         dir === nothing && continue
-        startswith(path, joinpath(dir, "docs", "src") * Base.Filesystem.path_separator) && return p
+        # anywhere under `docs`, since a build can name another directory than `src`
+        startswith(path, joinpath(dir, "docs") * Base.Filesystem.path_separator) && return p
     end
     return nothing
 end

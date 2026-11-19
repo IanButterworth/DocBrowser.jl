@@ -82,11 +82,13 @@ function read_escape(io::IO)
     if c2 == '\e'
         # Some terminals send Alt and an arrow as Escape before the arrow's own sequence.
         ev = read_escape(io)
-        return ev isa KeyEvent && ev.key !== :escape ? KeyEvent(ev.key, ev.char, ev.mods | ALT) : ev
+        return ev isa KeyEvent && ev.key !== :escape ? with_alt(ev) : ev
     end
-    ev = decode_char(c2)
-    return ev isa KeyEvent ? KeyEvent(ev.key, ev.char, ev.mods | ALT) : ev
+    return with_alt(decode_char(c2))
 end
+
+with_alt(ev::KeyEvent) = KeyEvent(ev.key, ev.char, ev.mods | ALT)
+with_alt(ev) = ev
 
 function decode_char(c::Char)
     c == '\r' || c == '\n' ? KeyEvent(:enter) :

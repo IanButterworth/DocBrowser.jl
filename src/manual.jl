@@ -161,7 +161,7 @@ function add_manual_page!(pages::Vector{ManualPage}, path::String, role::Symbol,
     headings = scan_headings(path; limit=1)
     # A standard library's page goes by the library's name, which is what people look for.
     title = if role === :stdlibdocs && basename(path) != "solvers.md"
-        basename(dirname(dirname(dirname(path))))
+        stdlib_name(path)
     else
         isempty(headings) ? splitext(basename(path))[1] : headings[1].text
     end
@@ -310,7 +310,7 @@ function manual_context(path::String, cat::Union{Nothing,Catalog}=nothing)
         p = cat === nothing ? nothing : page_package(cat, path)
         return p === nothing ? Main : p.mod
     end
-    name = first(splitpath(relpath(path, normpath(Sys.STDLIB))))
+    name = stdlib_name(path)
     for m in Base.loaded_modules_array()
         String(nameof(m)) == name && return m
     end
@@ -430,8 +430,8 @@ function manual_page(cat::Catalog, path::String, width::Int)
     end
     if in_stdlib_dir(path) && ctx === Main
         # The page of a standard library that is not loaded: its names can only be links once it is.
-        name = first(splitpath(relpath(path, normpath(Sys.STDLIB))))
-        id = Base.identify_package(name)
+        name = stdlib_name(path)
+        id =Base.identify_package(name)
         if id !== nothing
             addline!(pb, "  ", ("$name is not loaded, so the names on this page are not links.  ", :REPL_DocBrowser_dim),
                      (" Load $name ", :REPL_DocBrowser_link_active, LoadTarget(id)))
@@ -466,7 +466,7 @@ end
 # A page's short name: the standard library it documents, or else its file. Pkg's pages are
 # named for Pkg too, so that searching for it finds them.
 function page_name(p::ManualPage)
-    p.role === :stdlibdocs && return basename(dirname(dirname(dirname(p.path))))
+    p.role === :stdlibdocs && return stdlib_name(p.path)
     name = splitext(basename(p.path))[1]
     p.role === :pkgdocs || return name
     return name == "index" ? "Pkg" : "Pkg " * name
