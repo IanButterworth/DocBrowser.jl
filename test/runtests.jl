@@ -133,6 +133,10 @@ end
     # Another name for something documented is documented too.
     @test all(s -> DocBrowser.classify(cat, Base, s).documented, (:Cvoid, :÷, :ComplexF64))
     @test entries[:helper].vis === :internal
+    # A module is marked as its parent has it, and a package as exported.
+    @test DocBrowser.module_entry(cat, Base._RepeatInnerOuter).vis === :internal
+    @test DocBrowser.module_entry(cat, Base.Iterators).vis === :exported
+    @test DocBrowser.module_entry(cat, REPL).vis === :exported
     @test entries[:Point].kind === :type
     @test entries[Symbol("@mac")].kind === :macro
     @test entries[:Inner].kind === :module
