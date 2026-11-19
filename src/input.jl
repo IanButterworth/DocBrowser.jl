@@ -1,9 +1,10 @@
-# Decoding terminal input: keys, and SGR (1006) mouse reports.
+# Terminal input, as the browser's events. TermInput reads the terminal; its events are made
+# into these, which name keys and count mouse buttons from 1, as X11 does.
 
 """
     KeyEvent(key, char, mods)
 
-`key` is `:char` (with `char` set) or a named key such as `:up`, `:enter` or `:f1`.
+`key` is `:char` (with `char` set) or a named key such as `:up`, `:enter` or `:pageup`.
 `mods` is a bit set: 1 shift, 2 alt, 4 ctrl.
 """
 struct KeyEvent
@@ -63,47 +64,56 @@ function wait_bytes(io::IO, timeout::Float64)
     return within(() -> ended[] = eof(io), timeout) && !ended[]
 end
 
-# The modifier parameter of a CSI sequence is 1 + (shift | alt<<1 | ctrl<<2).
-csi_mods(params) = length(params) >= 2 ? max(params[2] - 1, 0) & 7 : 0
-
-const CSI_KEYS = Dict('A' => :up, 'B' => :down, 'C' => :right, 'D' => :left,
-                      'H' => :home, 'F' => :end, 'Z' => :backtab,
-                      'P' => :f1, 'Q' => :f2, 'R' => :f3, 'S' => :f4)
-
-const TILDE_KEYS = Dict(1 => :home, 7 => :home, 4 => :end, 8 => :end, 2 => :insert,
-                        3 => :delete, 5 => :pageup, 6 => :pagedown, 11 => :f1)
-
 """
     read_event(io) -> Union{Event, Nothing}
 
 Read one input event. Returns `nothing` for input that means nothing to the browser,
 such as a terminal's reply to a query.
 """
-function read_event(io::IO)
-    c = read(io, Char)
-    return c == '\e' ? read_escape(io) : decode_char(c)
+read_event(io::IO) = browser_event(TermInput.readevent(io))
+
+browser_event(ev::TermInput.KeyEvent) = key_event(ev.code)
+browser_event(ev::TermInput.PasteEvent) = PasteEvent(ev.text)
+function browser_event(ev::TermInput.MouseEvent)
+    ev.kind in (:wheelup, :wheeldown) && return MouseEvent(ev.kind, 0, ev.y, ev.x, ev.mods)
+    # back and forward are 8 and 9
+    button = ev.button >= 128 ? ev.button - 120 : ev.button + 1
+    return MouseEvent(ev.kind, button, ev.y, ev.x, ev.mods)
+end
+browser_event(ev::TermInput.SchemeEvent) = SchemeEvent(ev.dark, ev.bg)
+browser_event(::TermInput.LegacyMouseEvent) = LegacyMouseEvent()
+# the terminal's focus
+browser_event(ev) = nothing
+
+const NAMED_KEYS = Dict(
+    K_LEFT => (:left, 0), K_RIGHT => (:right, 0), K_UP => (:up, 0), K_DOWN => (:down, 0),
+    K_HOME => (:home, 0), K_END => (:end, 0), K_PGUP => (:pageup, 0), K_PGDN => (:pagedown, 0),
+    K_DEL => (:delete, 0), K_STAB => (:backtab, SHIFT), K_SUP => (:up, SHIFT),
+    K_SDOWN => (:down, SHIFT), K_WORD_BACK => (:backspace, ALT),
+    # Alt and an arrow, or Alt-b and Alt-f, which TermInput reads as moving by a word
+    K_WORD_LEFT => (:left, ALT), K_WORD_RIGHT => (:right, ALT))
+
+# A key as TermInput's code, for its fields to edit with, or `nothing`.
+function term_code(ev::KeyEvent)
+    ev.key === :char && ev.mods == 0 && return keycode(ev.char)
+    ev.key === :char && ev.mods == CTRL && 'a' <= ev.char <= 'z' && return Int(ev.char) - 96
+    ev.key === :char && ev.mods == ALT && ev.char == 'd' && return K_WORD_KILL
+    ev.key === :backspace && return ev.mods & ALT == 0 ? 127 : K_WORD_BACK
+    for (k, named) in NAMED_KEYS
+        named == (ev.key, ev.mods) && return k
+    end
+    return nothing
 end
 
-# What follows an Escape.
-function read_escape(io::IO)
-    wait_bytes(io, 0.03) || return KeyEvent(:escape)
-    c2 = read(io, Char)
-    # A terminal sends a whole sequence at once. With nothing after it, this is Alt and a key.
-    if c2 in "[O]P" && wait_bytes(io, 0.03)
-        c2 == '[' && return read_csi(io)
-        c2 == 'O' && return read_ss3(io)
-        return skip_string(io)
-    end
-    if c2 == '\e'
-        # Some terminals send Alt and an arrow as Escape before the arrow's own sequence.
-        ev = read_escape(io)
-        return ev isa KeyEvent && ev.key !== :escape ? with_alt(ev) : ev
-    end
-    return with_alt(decode_char(c2))
+function key_event(k::Int)
+    named = get(NAMED_KEYS, k, nothing)
+    named === nothing || return KeyEvent(named...)
+    k == K_WORD_KILL && return KeyEvent('d', ALT)
+    k == K_EDIT && return KeyEvent('e', ALT)
+    k == 27 && return KeyEvent(:escape)
+    (k < 0 || k >= K_BASE) && return nothing
+    return decode_char(keychar(k))
 end
-
-with_alt(ev::KeyEvent) = KeyEvent(ev.key, ev.char, ev.mods | ALT)
-with_alt(ev) = ev
 
 function decode_char(c::Char)
     c == '\r' || c == '\n' ? KeyEvent(:enter) :
@@ -111,108 +121,4 @@ function decode_char(c::Char)
     c == '\x7f' || c == '\b' ? KeyEvent(:backspace) :
     c < ' ' ? KeyEvent(Char(UInt32(c) + 0x60), CTRL) :
     KeyEvent(c)
-end
-
-function read_ss3(io::IO)
-    c = read(io, Char)
-    key = get(CSI_KEYS, c, nothing)
-    return key === nothing ? nothing : KeyEvent(key)
-end
-
-# OSC and DCS strings (such as replies to colour queries) end with BEL or ESC \. The reply
-# with the background colour is kept.
-function skip_string(io::IO)
-    buf = IOBuffer()
-    while true
-        # Give up if the string stops, so that it cannot swallow what is typed next.
-        wait_bytes(io, 0.1) || return nothing
-        c = read(io, Char)
-        c == '\a' && break
-        if c == '\e'
-            wait_bytes(io, 0.03) || return nothing
-            read(io, Char) == '\\' && break
-        end
-        position(buf) < 160 && write(buf, c)
-    end
-    m = match(r"^11;([\x21-\x7e]{1,100})$", String(take!(buf)))
-    return m === nothing ? nothing : SchemeEvent(nothing, m[1])
-end
-
-function read_csi(io::IO)
-    private = '\0'
-    c = read(io, Char)
-    if c in "<=>?"
-        private = c
-        c = read(io, Char)
-    end
-    buf = IOBuffer()
-    # A mouse report ends at `M` or `m` and nowhere else: xterm.js sends `<0;NaN;NaNm`, and
-    # ended at the `N`, the rest would arrive as keys.
-    while !('@' <= c <= '~') || private == '<' && !(c in "Mm")
-        write(buf, c)
-        position(buf) > 32 && return nothing # no sequence a terminal sends
-        c = read(io, Char)
-    end
-    final = c
-    body = String(take!(buf))
-    private == '\0' && final == 'M' && isempty(body) && return read_x10(io)
-    if private == '?' && final == 'n' && body in ("997;1", "997;2")
-        return SchemeEvent(body == "997;1", "")
-    end
-    params = Int[something(tryparse(Int, p), 0) for p in split(body, ';'; keepempty=true)]
-    if private == '<' && final in ('M', 'm')
-        occursin(r"^\d+;\d+;\d+$", body) || return nothing
-        return mouse_event(params, final == 'M')
-    end
-    private == '\0' || return nothing
-    if final == '~'
-        isempty(params) && return nothing
-        params[1] == 200 && return read_paste(io)
-        key = get(TILDE_KEYS, params[1], nothing)
-        return key === nothing ? nothing : KeyEvent(key, csi_mods(params))
-    end
-    final in ('I', 'O') && return nothing # focus in and out
-    key = get(CSI_KEYS, final, nothing)
-    key === nothing && return nothing
-    return KeyEvent(key, key === :backtab ? SHIFT : csi_mods(params))
-end
-
-# The three bytes after an X10 report's `CSI M`, each a value plus 32, so never an Escape: one
-# is the start of whatever came next.
-function read_x10(io::IO)
-    for _ in 1:3
-        wait_bytes(io, 0.03) || break
-        peek(io, UInt8) == 0x1b && break
-        read(io, UInt8)
-    end
-    return LegacyMouseEvent()
-end
-
-function mouse_event(params::Vector{Int}, pressed::Bool)
-    length(params) == 3 || return nothing
-    b, col, row = params
-    mods = ((b & 4) != 0 ? SHIFT : 0) | ((b & 8) != 0 ? ALT : 0) | ((b & 16) != 0 ? CTRL : 0)
-    button = b & 3
-    if (b & 64) != 0
-        action = button == 0 ? :wheelup : button == 1 ? :wheeldown : :wheelside
-        return MouseEvent(action, 0, row, col, mods)
-    elseif (b & 128) != 0
-        return MouseEvent(pressed ? :press : :release, button + 8, row, col, mods)
-    elseif (b & 32) != 0
-        return MouseEvent(button == 3 ? :move : :drag, button + 1, row, col, mods)
-    end
-    return MouseEvent(pressed ? :press : :release, button + 1, row, col, mods)
-end
-
-# If the marker that ends a paste is lost, the paste ends when the terminal stops sending.
-# Waiting for the marker would take every later key as part of the paste.
-function read_paste(io::IO, timeout::Float64=1.0)
-    marker = codeunits("\e[201~")
-    bytes = UInt8[]
-    while wait_bytes(io, timeout)
-        push!(bytes, read(io, UInt8))
-        n = length(bytes) - length(marker)
-        n >= 0 && view(bytes, n+1:length(bytes)) == marker && return PasteEvent(String(resize!(bytes, n)))
-    end
-    return PasteEvent(String(bytes))
 end
