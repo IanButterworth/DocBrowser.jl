@@ -19,7 +19,9 @@ struct SectionTarget
 end
 struct LoadTarget
     id::PkgId
+    then::String # a name in the package to open once it is loaded, or ""
 end
+LoadTarget(id::PkgId) = LoadTarget(id, "")
 struct AnchorTarget
     heading::Int # counts the page's headings from the top
 end
