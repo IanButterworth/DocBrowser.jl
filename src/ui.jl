@@ -128,10 +128,7 @@ mutable struct Browser
     # calls look up their methods again, which waits for the loading to let go of the method
     # tables, so the browser would stop responding while it loads.
     world::UInt
-    # The search being typed is a readline field: `qcol` characters of it are before the
-    # cursor, and `killed` is what ^W, ^K and the like took last, for ^Y to put back.
-    qcol::Int
-    killed::String
+    field::TermInput.LineInput   # the search being typed, with its cursor
     # Whether the terminal is light or dark, and its background, as far as is known, and the
     # faces that go with them.
     theme::Union{Nothing,Symbol}
@@ -151,7 +148,7 @@ function Browser(term::REPL.Terminals.TextTerminal, cat::Catalog=Catalog())
                 get(term.out_stream, :color, true)::Bool || REPL.Terminals.hascolor(term),
                 nothing, false, (0.0, 0.0, 0.0, 0.0), nothing, ManualHit[], 0, NameEntry[], Tuple{String,PkgId}[], SEARCH_INDIRECT[], 0, (0, 0), Inf, nothing,
                 tip_order(), 1, false, nothing, nothing, "", nothing, nothing, "", Base.get_world_counter(),
-                0, "", terminal_theme(), nothing, browser_faces(terminal_theme(), nothing), nothing)
+                TermInput.LineInput(""), terminal_theme(), nothing, browser_faces(terminal_theme(), nothing), nothing)
     any(p -> p.role in (:project, :direct), cat.pkgs) || push!(b.expanded, :indirect)
     refresh_side!(b)
     b.side.cursor = 1 # the start page
@@ -717,11 +714,11 @@ function suspend(f, b::Browser)
             f()
         else
             # The scheme's reports would land in the editor's input, and it may change meanwhile.
-            rich_colours() && write(b.out, scheme_reports(false))
+            rich_colours() && write(b.out, TermInput.scheme_reports(false))
             try
                 TermInput.suspend(f, b.held)
             finally
-                rich_colours() && write(b.out, scheme_reports(true))
+                rich_colours() && write(b.out, TermInput.scheme_reports(true))
             end
         end
         return true
@@ -1299,7 +1296,12 @@ function header_right(b::Browser, level::Int)
         # The field being typed into stands out; once typing stops it is only shaded.
         face = b.typing ? :REPL_DocBrowser_searchbox : :REPL_DocBrowser_unfocused
         q = b.query
-        text = b.typing ? string(" ", first(q, b.qcol), "▏", chop(q; head=b.qcol, tail=0)) : string(" ", q, " ")
+        text = if b.typing
+            col = TermInput.column(b.field)
+            string(" ", first(q, col - 1), "▏", chop(q; head=col - 1, tail=0))
+        else
+            string(" ", q, " ")
+        end
         pad = level == 0 ? max(0, 22 - textwidth(text)) : 0
         # a search for everything says nothing of what it looks in
         level < 2 && b.searchmode !== :all && push!(right, Seg(" "), Seg(" " * mode * " ⇄ ", face, (:toggle_text,)))
@@ -1745,14 +1747,11 @@ end
 
 ## Terminal setup ##
 
-# Asks whether the terminal is dark or light, now and when that changes, and for its
-# background colour, for the rich faces.
-scheme_reports(on::Bool) = on ? "\e[?2031h\e[?996n\e]11;?\e\\" : "\e[?2031l"
-
 function enter_screen(b::Browser)
     # Pointer moves too, for the cards and the links under the pointer.
     b.held = TermInput.enter_terminal(b.in, b.out; altscreen=true, mouse=true, motion=true, paste=true)
-    rich_colours() && write(b.out, scheme_reports(true))
+    # whether the terminal is dark or light, for the rich faces, now and when it changes
+    rich_colours() && write(b.out, TermInput.scheme_reports(true))
     b.prev = String[]
 end
 
@@ -1763,7 +1762,7 @@ function leave_screen(b::Browser, drain::Bool=false)
     # Mouse reports sent before reporting stopped would reach the prompt. They must be read
     # while still in raw mode, which delivers them without waiting for a newline.
     try
-        rich_colours() && write(b.out, scheme_reports(false))
+        rich_colours() && write(b.out, TermInput.scheme_reports(false))
         write(b.out, TermInput.mouse_reporting(false; motion=true))
         t.mouse = false
         drain && drain_mouse(b.in)
@@ -2474,7 +2473,7 @@ valid_text(s::AbstractString) = isvalid(s) ? String(s) : filter(isvalid, String(
 
 function start_search!(b::Browser, query::String="")
     b.query = valid_text(query)
-    b.qcol = length(b.query)
+    b.field = TermInput.LineInput(""; initial=b.query)
     b.typing = true
     b.focus = :names
     b.source = :names
@@ -2539,7 +2538,8 @@ function update_search!(b::Browser)
     show_heading!(b)
 end
 
-# The browser's own keys come first, and the rest edit the query.
+# The browser's own keys come first, and the rest edit the query, with the readline keys that
+# a TermInput field has.
 function handle_typing!(b::Browser, ev::KeyEvent)
     if ev.key === :char && ev.mods == CTRL && ev.char == 't'
         toggle_textsearch!(b)
@@ -2567,13 +2567,14 @@ function handle_typing!(b::Browser, ev::KeyEvent)
             b.typing = false
             open_entry!(b, row.entry::NameEntry)
         end
-    elseif ev.key === :tab || ev.key === :right && ev.mods == 0 && b.qcol >= length(b.query)
+    elseif ev.key === :tab || ev.key === :right && ev.mods == 0 && TermInput.column(b.field) > length(b.query)
         # past the end of the query, on to the results
         b.typing = false
     elseif ev.key === :escape || (ev.key === :char && ev.mods == CTRL && ev.char in ('c', 'g'))
         close_search!(b)
     else
-        edit_query!(b, ev)
+        k = term_code(ev)
+        k === nothing || TermInput.handle!(b.field, k) === :unhandled || edited!(b)
     end
     return true
 end
@@ -2714,12 +2715,7 @@ function handle!(b::Browser, ev::PasteEvent)
     text = strip(replace(valid_text(ev.text), r"\s+" => ' '))
     isempty(text) && return false
     # into the search being typed, where the cursor is, or else a new search
-    if b.typing
-        q = b.query
-        set_query!(b, string(first(q, b.qcol), text, chop(q; head=b.qcol, tail=0)), b.qcol + length(text))
-    else
-        start_search!(b, String(text))
-    end
+    b.typing ? (TermInput.paste!(b.field, text); edited!(b)) : start_search!(b, String(text))
     return true
 end
 
@@ -2745,80 +2741,9 @@ function handle!(b::Browser, ::LegacyMouseEvent)
     return false
 end
 
-## Editing the search ##
-
-# The keys that edit the query, as readline has them. ^A is the browser's.
-function edit_query!(b::Browser, ev::KeyEvent)
-    q = collect(b.query)
-    n = clamp(b.qcol, 0, length(q))
-    alt, ctrl = ev.mods == ALT, ev.mods == CTRL
-    key(c) = ev.key === :char && ev.char == c
-    if ev.key === :char && ev.mods & (CTRL | ALT) == 0
-        isvalid(ev.char) || return false
-        insert!(q, n + 1, ev.char)
-        n += 1
-    elseif ev.key === :backspace && ev.mods == 0
-        n > 0 && (deleteat!(q, n); n -= 1)
-    elseif ev.key === :delete || ctrl && key('d')
-        n < length(q) && deleteat!(q, n + 1)
-    elseif ev.key === :backspace && alt || ctrl && key('w')
-        # Alt-Backspace takes a word of letters and digits, ^W one up to a space
-        m = word_back(q, n, alt ? isalnum : !isspace)
-        kill!(b, q, m+1:n)
-        n = m
-    elseif ctrl && key('u')
-        kill!(b, q, 1:n)
-        n = 0
-    elseif ctrl && key('k')
-        kill!(b, q, n+1:length(q))
-    elseif alt && key('d')
-        kill!(b, q, n+1:word_forward(q, n, isalnum))
-    elseif ctrl && key('y')
-        for c in b.killed
-            insert!(q, n += 1, c)
-        end
-    elseif ev.key === :left && ev.mods == 0 || ctrl && key('b')
-        n = max(0, n - 1)
-    elseif ev.key === :right && ev.mods == 0 || ctrl && key('f')
-        n = min(length(q), n + 1)
-    elseif ev.key === :left && alt || alt && key('b')
-        n = word_back(q, n, isalnum)
-    elseif ev.key === :right && alt || alt && key('f')
-        n = word_forward(q, n, isalnum)
-    elseif ev.key === :home
-        n = 0
-    elseif ev.key === :end || ctrl && key('e')
-        n = length(q)
-    else
-        return false
-    end
-    set_query!(b, String(q), n)
-    return true
-end
-
-isalnum(c::Char) = isletter(c) || isdigit(c)
-
-# Where the word before or after the first `n` characters of `q` starts or ends, over
-# anything that is not in a word first.
-function word_back(q, n, inword)
-    while n > 0 && !inword(q[n]); n -= 1; end
-    while n > 0 && inword(q[n]); n -= 1; end
-    return n
-end
-function word_forward(q, n, inword)
-    while n < length(q) && !inword(q[n+1]); n += 1; end
-    while n < length(q) && inword(q[n+1]); n += 1; end
-    return n
-end
-
-function kill!(b::Browser, q::Vector{Char}, r::UnitRange{Int})
-    isempty(r) && return
-    b.killed = String(q[r])
-    deleteat!(q, r)
-end
-
-function set_query!(b::Browser, q::String, col::Int)
-    b.qcol = col
+# The query was edited in its field.
+function edited!(b::Browser)
+    q = valid_text(TermInput.text(b.field))
     q == b.query && return
     b.query = q
     update_search!(b)
@@ -3250,7 +3175,7 @@ function run_screen!(b::Browser)
                 b.quit && stay_open!(b)
                 # During a burst, of wheel turns or a held key, the frame is drawn once, at its end.
                 pending |= changed
-                if pending && !b.quit && bytesavailable(b.in) == 0
+                if pending && !b.quit && !TermInput.input_waiting(b.in)
                     in_world(draw, b)
                     pending = false
                 end

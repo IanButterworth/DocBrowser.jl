@@ -93,6 +93,18 @@ const NAMED_KEYS = Dict(
     # Alt and an arrow, or Alt-b and Alt-f, which TermInput reads as moving by a word
     K_WORD_LEFT => (:left, ALT), K_WORD_RIGHT => (:right, ALT))
 
+# A key as TermInput's code, for its fields to edit with, or `nothing`.
+function term_code(ev::KeyEvent)
+    ev.key === :char && ev.mods == 0 && return keycode(ev.char)
+    ev.key === :char && ev.mods == CTRL && 'a' <= ev.char <= 'z' && return Int(ev.char) - 96
+    ev.key === :char && ev.mods == ALT && ev.char == 'd' && return K_WORD_KILL
+    ev.key === :backspace && return ev.mods & ALT == 0 ? 127 : K_WORD_BACK
+    for (k, named) in NAMED_KEYS
+        named == (ev.key, ev.mods) && return k
+    end
+    return nothing
+end
+
 function key_event(k::Int)
     named = get(NAMED_KEYS, k, nothing)
     named === nothing || return KeyEvent(named...)

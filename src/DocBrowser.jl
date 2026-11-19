@@ -16,7 +16,7 @@ using Base64: base64encode
 import TermInput
 using TermInput.Keys: K_BASE, K_LEFT, K_RIGHT, K_UP, K_DOWN, K_HOME, K_END, K_PGUP, K_PGDN,
     K_DEL, K_STAB, K_SUP, K_SDOWN, K_WORD_BACK, K_WORD_LEFT, K_WORD_RIGHT, K_WORD_KILL, K_EDIT,
-    keychar
+    keychar, keycode
 
 export browse
 

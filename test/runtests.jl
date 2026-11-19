@@ -2,6 +2,7 @@ using Test
 using REPL
 import StyledStrings
 import TermInput
+import StyledStrings
 # Loading the browser should not load Downloads, unless something already has.
 const DOWNLOADS_PRELOADED = haskey(Base.loaded_modules,
     Base.PkgId(Base.UUID("f43a241f-c20a-4ad4-852c-f6b1247861c6"), "Downloads"))
@@ -282,6 +283,8 @@ end
     browse(t)
     out = String(take!(t.out_stream.io))
     @test occursin("\e[?1049h", out) && occursin(TermInput.mouse_reporting(false; motion=true), out)
+    # A burst of keys already waiting is drawn once, at its end, and here it ends by quitting.
+    @test count("\e[?2026h", out) == 1
     @test endswith(out, "\e[?2004l\e[?25h\e[?1049l")
     # A burst of keys already waiting is drawn once, at its end, and here it ends by quitting.
     @test count("\e[?2026h", out) == 1
