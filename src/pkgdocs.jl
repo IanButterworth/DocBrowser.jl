@@ -235,3 +235,33 @@ function autodocs_module(x, ctx::Module)
     end
     return m isa Module ? m : nothing
 end
+
+## Packages that are not loaded ##
+
+# Where a package that is not loaded is, as the environment would load it.
+function unloaded_dir(id::PkgId)
+    path = Base.locate_package(id)
+    return path === nothing ? nothing : dirname(dirname(path))
+end
+
+# The manual of a package that is not loaded, read from its source.
+function unloaded_docs(cat::Catalog, id::PkgId)
+    dir = unloaded_dir(id)
+    return dir === nothing ? NO_DOCS : get!(() -> package_docs(dir), cat.pkgdocs, dir)
+end
+
+# The names that the manual of a package that is not loaded lists.
+unloaded_package_names(cat::Catalog, id::PkgId) = String[n for (n, i) in unloaded_names(cat) if i == id]
+
+# The package that is not loaded which the manual page `path` is from, or `nothing`.
+function unloaded_owner(cat::Catalog, path::String)
+    if in_stdlib_dir(path)
+        id = Base.identify_package(stdlib_name(path))
+        return id === nothing || haskey(Base.loaded_modules, id) ? nothing : id
+    end
+    for id in cat.unloaded
+        dir = unloaded_dir(id)
+        dir !== nothing && startswith(path, joinpath(dir, "docs") * Base.Filesystem.path_separator) && return id
+    end
+    return nothing
+end

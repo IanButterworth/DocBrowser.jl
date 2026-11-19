@@ -73,7 +73,7 @@ function precompile_workload()
     for tip in eachindex(TIPS)
         start_page(b.cat, 80, tip)
     end
-    unloaded_page(PkgId(UUID(UInt128(1)), "Example"), 80)
+    unloaded_page(b.cat, PkgId(UUID(UInt128(1)), "Example"), 80)
     # The event loop, the screen set-up and the entry points.
     browse(terminal("jjlj\ty"); query = "sum")
     browse(terminal("q"), Base.Iterators)

@@ -293,6 +293,11 @@ function refresh_names!(b::Browser)
         for k in eachindex(START_SECTIONS)
             push!(rows, NameRow(:heading, nothing, :none, k))
         end
+    elseif side_unloaded(b) !== nothing
+        push!(rows, NameRow(:about, nothing, :none, 0))
+        for r in unloaded_rows(b.cat, side_unloaded(b))
+            (r.kind === :header || !(r.group in b.collapsed)) && push!(rows, r)
+        end
     elseif side_row(b) !== nothing && side_row(b).role === :pkgdocs
         # Pkg's manual lists its pages, each of which unfolds to its headings.
         push!(rows, NameRow(:about, nothing, :none, 0))
@@ -364,7 +369,34 @@ side_row(b::Browser) = get(b.side_rows, b.side.cursor, nothing)
 function side_placeholder(b::Browser)
     b.query === nothing && b.source === :side || return nothing
     row = side_row(b)
-    return row === nothing || row.pkg !== nothing || row.page !== nothing || row.role === :start ? nothing : row
+    (row === nothing || row.pkg !== nothing || row.page !== nothing || row.role === :start) && return nothing
+    # a package that is not loaded lists what its source documents, if anything
+    row.unloaded === nothing || isempty(unloaded_rows(b.cat, row.unloaded)) || return nothing
+    return row
+end
+
+# The package that is not loaded picked in the sidebar, or `nothing`.
+function side_unloaded(b::Browser)
+    b.query === nothing || return nothing
+    row = side_row(b)
+    return row === nothing ? nothing : row.unloaded
+end
+
+# The pages of the manual and the names that the source of a package that is not loaded
+# documents, as rows of the names pane.
+function unloaded_rows(cat::Catalog, id::PkgId)
+    rows = NameRow[]
+    pages = unloaded_docs(cat, id).pages
+    isempty(pages) || push!(rows, NameRow(:header, nothing, :manual, length(pages)))
+    for (j, p) in enumerate(pages)
+        push!(rows, NameRow(:pkgpage, nothing, :manual, j, ManualHit(p.path, "", 0)))
+    end
+    names = unloaded_package_names(cat, id)
+    isempty(names) || push!(rows, NameRow(:header, nothing, :name_hits, length(names)))
+    for n in names
+        push!(rows, NameRow(:unloaded, nothing, :name_hits, 0, nothing, LoadTarget(id, n)))
+    end
+    return rows
 end
 
 # Whether the start page is picked in the sidebar.
@@ -633,6 +665,7 @@ function current_key(b::Browser)
     row !== nothing && row.kind in (:hit, :pkgpage) && return ManualTarget(row.hit.path, "")
     row !== nothing && row.kind === :entry && return row.entry
     row !== nothing && row.kind === :unloaded && return row.target
+    row !== nothing && row.kind === :about && side_unloaded(b) !== nothing && return LoadTarget(side_unloaded(b))
     # a search's group heading, or a search with no results, shows nothing
     b.query === nothing || return :none
     return ModuleTarget(b.mod)
@@ -958,7 +991,7 @@ function page(b::Browser, key, width::Int)
             key isa NameEntry ? entry_page(b.cat, key, width, flags) :
             key isa ModuleTarget ? module_page(b.cat, key.mod, width) :
             key isa SectionTarget ? section_page(b.cat, key.role, width) :
-            key isa LoadTarget ? unloaded_page(key.id, width, key.then) :
+            key isa LoadTarget ? unloaded_page(b.cat, key.id, width, key.then) :
             key isa ManualTarget ? manual_page(b.cat, key.path, width) :
             key === :start ? start_page(b.cat, width, b.tips[b.tip], b.tip) :
             key === :help ? help_page(b.cat, width) : Page(PageBuilder(width))
@@ -1392,8 +1425,9 @@ function list_line(b::Browser, pane::Symbol, i::Int, x::Int, w::Int, row::Int)
         if r.kind === :about
             p = b.query === nothing ? side_page(b) : nothing
             pkg = p !== nothing && p.role === :pkgdocs
-            title = on_start(b) ? "Start" : pkg ? "Pkg" : p === nothing ? String(nameof(b.mod)) : p.title
-            n = pkg ? "$(count(r -> r.kind === :page, b.name_rows)) pages" :
+            id = side_unloaded(b)
+            title = on_start(b) ? "Start" : pkg ? "Pkg" : id !== nothing ? id.name : p === nothing ? String(nameof(b.mod)) : p.title
+            n = id !== nothing ? "not loaded" : pkg ? "$(count(r -> r.kind === :page, b.name_rows)) pages" :
                 p === nothing && !on_start(b) ? "$(count(r -> r.kind === :entry, b.name_rows)) names" :
                 "$(length(b.name_rows) - 1) sections"
             put_seg!(rb, " " * title, b.focus === :names ? :REPL_DocBrowser_title : :REPL_DocBrowser_section, action)
@@ -1407,7 +1441,8 @@ function list_line(b::Browser, pane::Symbol, i::Int, x::Int, w::Int, row::Int)
             put_seg!(rb, Symbol(p.path) in b.expanded ? " ▾ " : " ▸ ", :REPL_DocBrowser_dim, action)
             put_seg!(rb, p.title, :REPL_DocBrowser_pane_title, action)
         elseif r.kind === :pkgpage
-            pages = package_docs(b.cat, b.mod).pages
+            id = side_unloaded(b)
+            pages = id === nothing ? package_docs(b.cat, b.mod).pages : unloaded_docs(b.cat, id).pages
             r.count in eachindex(pages) || return fit("", w)
             put_seg!(rb, "   ")
             put_seg!(rb, pages[r.count].title, nothing, action)

@@ -428,15 +428,13 @@ function manual_page(cat::Catalog, path::String, width::Int)
         addline!(pb)
         gap_notice!(pb, package_docs(cat, pkg.mod), online_docs(pkg.id, pkgdir(pkg.mod)))
     end
-    if in_stdlib_dir(path) && ctx === Main
-        # The page of a standard library that is not loaded: its names can only be links once it is.
-        name = stdlib_name(path)
-        id =Base.identify_package(name)
-        if id !== nothing
-            addline!(pb, "  ", ("$name is not loaded, so the names on this page are not links.  ", :REPL_DocBrowser_dim),
-                     (" Load $name ", :REPL_DocBrowser_link_active, LoadTarget(id)))
-            addline!(pb)
-        end
+    # The page of a package that is not loaded: its docstrings, and links to its names, need
+    # it to be.
+    id = ctx === Main ? unloaded_owner(cat, path) : nothing
+    if id !== nothing
+        addline!(pb, "  ", ("$(id.name) is not loaded, so its docstrings, and links to its names, are not here.  ", :REPL_DocBrowser_dim),
+                 (" Load $(id.name) ", :REPL_DocBrowser_link_active, LoadTarget(id)))
+        addline!(pb)
     end
     source = startswith(path, manual_dir()) ? manual_source() : nothing
     if source !== nothing

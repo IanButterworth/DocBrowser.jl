@@ -910,7 +910,7 @@ function module_page(cat::Catalog, m::Module, width::Int)
         else
             addline!(pb, "  ", ("No module docstring; showing $(basename(readme)).", :REPL_DocBrowser_dim))
             addline!(pb)
-            md = @attempt strip_badges!(Markdown.parse(read(readme, String))) Markdown.parse("Could not read `$readme`.")
+            md = readme_markdown(readme)
         end
     end
     add_markdown!(pb, md, m, cat; contents=true)
@@ -1100,15 +1100,24 @@ function pkg_line!(pb::PageBuilder, cat::Catalog)
     addline!(pb, "    ", ("Pkg", nothing, ManualTarget(cat.manual[i].path, "")))
 end
 
-function unloaded_page(id::PkgId, width::Int, then::String="")
+function unloaded_page(cat::Catalog, id::PkgId, width::Int, then::String="")
     pb = PageBuilder(width)
     stdlib = Base.is_stdlib(id)
+    dir = unloaded_dir(id)
     addline!(pb)
     addline!(pb, "  ", (isempty(then) ? id.name : then, :REPL_DocBrowser_title))
     addline!(pb, "  ", (stdlib ? "standard library · not loaded" : "direct dependency · not loaded", :REPL_DocBrowser_dim))
-    add_links!(pb, id, nothing, stdlib ? :stdlib : :direct)
+    dir === nothing || addline!(pb, "  ", (Base.contractuser(dir), :REPL_DocBrowser_dim))
+    add_links!(pb, id, dir, stdlib ? :stdlib : :direct)
+    # Its manual, which its source has, can be read before it is loaded.
+    pages = unloaded_docs(cat, id).pages
+    if isempty(then) && !isempty(pages)
+        n = length(pages)
+        addline!(pb, "  ", ("manual ", :REPL_DocBrowser_dim), (pages[1].title, nothing, ManualTarget(pages[1].path, "")),
+                 (n > 1 ? "  $n pages, listed with the names" : "", :REPL_DocBrowser_dim))
+    end
     rule!(pb)
-    what = isempty(then) ? "its documentation is" : "the documentation of $then is"
+    what = isempty(then) ? "its docstrings are" : "the docstring of $then is"
     whose = stdlib ? "$(id.name) is a standard library" : "The active project depends on $(id.name)"
     addflow!(pb, "  ", Any[w * " " for w in split(
         "$whose, but it has not been loaded yet, so $what not available. Loading it runs " *
@@ -1117,5 +1126,28 @@ function unloaded_page(id::PkgId, width::Int, then::String="")
     addline!(pb, "  ", (" Load $(id.name) ", :REPL_DocBrowser_link_active, LoadTarget(id, then)),
              ("  or press ⏎", :REPL_DocBrowser_dim))
     addline!(pb)
+    readme = isempty(then) && dir !== nothing ? find_readme(dir) : nothing
+    if readme !== nothing
+        rule!(pb)
+        addline!(pb, "  ", ("Its $(basename(readme)):", :REPL_DocBrowser_dim))
+        addline!(pb)
+        add_markdown!(pb, readme_markdown(readme), Main, cat)
+    end
     return Page(pb)
+end
+
+# A README, without its badges, and without the definitions of reference links (`[x]: url`),
+# which the Markdown parser keeps as text, as it does badges that use them.
+function readme_markdown(path::String)
+    text = @attempt read(path, String) return Markdown.parse("Could not read `$path`.")
+    text = replace(text, r"^ {0,3}\[[^\]\n]+\]:[ \t]*\S+.*$"m => "",
+                   # badges written with reference links, which are not read as images
+                   r"\[!\[[^\]\n]*\]\[[^\]\n]*\]\]\[[^\]\n]*\]" => "", r"!\[[^\]\n]*\]\[[^\]\n]*\]" => "")
+    return strip_badges!(Markdown.parse(text))
+end
+
+# The README in a package's directory, if it has one.
+function find_readme(dir::String)
+    i = findfirst(f -> occursin(r"^readme(\.md)?$"i, f), readdir(dir))
+    return i === nothing ? nothing : joinpath(dir, readdir(dir)[i])
 end
