@@ -111,6 +111,11 @@ mutable struct Browser
     console::Union{Nothing,Vector{String}}
     loading::String
     load_task::Union{Nothing,Task}
+    # The world that keys and drawing run in. It moves on only when a package that the browser
+    # loaded is done: in the latest world, each method that loading adds makes the browser's
+    # calls look up their methods again, which waits for the loading to let go of the method
+    # tables, so the browser would stop responding while it loads.
+    world::UInt
 end
 
 function Browser(term::REPL.Terminals.TextTerminal, cat::Catalog=Catalog())
@@ -123,7 +128,7 @@ function Browser(term::REPL.Terminals.TextTerminal, cat::Catalog=Catalog())
                 (0.0, nothing), ReentrantLock(), Dict{Any,Set{Symbol}}(), false, LAYOUT[],
                 get(term.out_stream, :color, true)::Bool || REPL.Terminals.hascolor(term),
                 nothing, false, (0.0, 0.0, 0.0, 0.0), nothing, ManualHit[], SEARCH_INDIRECT[], 0, (0, 0), Inf, nothing,
-                tip_order(), 1, false, nothing, nothing, "", nothing)
+                tip_order(), 1, false, nothing, nothing, "", nothing, Base.get_world_counter())
     any(p -> p.role in (:project, :direct), cat.pkgs) || push!(b.expanded, :indirect)
     refresh_side!(b)
     b.side.cursor = 1 # the start page
@@ -667,13 +672,16 @@ function load_package!(b::Browser, id::PkgId)
         # Go to the package only if it is still what the browser shows.
         go = current_key(b) == LoadTarget(id)
         # The package's bindings are only visible in the latest world.
-        Base.invokelatest(show_loaded!, b, id, go)
+        b.world = Base.get_world_counter()
+        in_world(show_loaded!, b, id, go)
     end
     in_console(load, done, b, what)
     return
 end
 
 loading(b::Browser) = b.load_task !== nothing && !istaskdone(b.load_task)
+
+in_world(f, b::Browser, args...) = Base.invoke_in_world(b.world, f, b, args...)
 
 # A package being loaded prints to the panel until it is done, so the browser stays open.
 function stay_open!(b::Browser)
@@ -692,7 +700,7 @@ function in_console(f, done, b::Browser, what::String)
     pipe = Pipe()
     Base.link_pipe!(pipe; reader_supports_async=true, writer_supports_async=true)
     redraw() = try
-        b.live && Base.invokelatest(draw, b)
+        b.live && in_world(draw, b)
     catch
     end
     # Started here, on the browser's thread, so that they run while `f` keeps its own busy.
@@ -2913,8 +2921,7 @@ end
 # Draw again if the terminal has changed size, or it is time for a card to show.
 function tick(b::Browser)
     @lock b.lock try
-        # Packages loaded from the browser are only visible in the latest world.
-        b.quit || ((check_size!(b) | Base.invokelatest(show_card!, b)) && Base.invokelatest(draw, b))
+        b.quit || ((check_size!(b) | in_world(show_card!, b)) && in_world(draw, b))
     catch err
         # shown by the next draw, as for a key that fails
         b.status = "Error: " * first_line(err)
@@ -2946,14 +2953,14 @@ function run_screen!(b::Browser)
             ev === nothing && continue
             @lock b.lock begin
                 changed = try
-                    Base.invokelatest(handle!, b, ev)
+                    in_world(handle!, b, ev)
                 catch err
                     err isa InterruptException && rethrow()
                     b.status = "Error: " * first_line(err)
                     true
                 end
                 b.quit && stay_open!(b)
-                changed && !b.quit && Base.invokelatest(draw, b)
+                changed && !b.quit && in_world(draw, b)
             end
             # A click that closes the browser is followed by its release, which would
             # otherwise be typed at the prompt.
