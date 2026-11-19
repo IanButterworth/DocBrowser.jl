@@ -1688,8 +1688,8 @@ function section_start(path::String, k::Int)
 end
 
 # Show the card of what the pointer has rested on. Returns whether the screen must change.
-function show_card!(b::Browser)
-    b.card === nothing && b.hover !== nothing && time() - b.hover_since >= CARD_DELAY || return false
+function show_card!(b::Browser, now::Float64=time())
+    b.card === nothing && b.hover !== nothing && now - b.hover_since >= CARD_DELAY || return false
     b.hover_since = Inf # once, until the pointer moves on
     subject = card_subject(b, b.hover)
     subject === nothing && return false
