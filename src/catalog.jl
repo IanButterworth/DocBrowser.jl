@@ -109,6 +109,9 @@ mutable struct Catalog
     index_headings::Dict{String,Vector{Heading}} # the headings found by scanning each page
     sections::Union{Nothing,Vector{Tuple{String,String,String}}} # lowercased text of each section, built on first use
     pkgdocs::Dict{String,Any} # the manual of each package, by its directory, found on first use
+    # The names that the manuals of packages that are not loaded list, each with its package,
+    # found on first use.
+    unloaded_names::Union{Nothing,Vector{Tuple{String,PkgId}}}
 end
 
 function parse_uuids(deps)
@@ -256,7 +259,7 @@ function Catalog()
     bymod = IdDict{Module,PkgEntry}(p.mod => p for p in pkgs)
     return Catalog(pkgs, bymod, documented_bindings(), IdDict{Module,Vector{NameEntry}}(), nothing,
                    unloaded_deps(), nothing, manual_pages(), nothing, Dict{String,Vector{Heading}}(), Dict{String,Vector{Heading}}(), nothing,
-                   Dict{String,Any}())
+                   Dict{String,Any}(), nothing)
 end
 
 function documented_bindings()
@@ -414,6 +417,77 @@ function name_score(q::AbstractString, name::AbstractString)
         i = nextind(name, j)
     end
     return max(1, 150 - (i - first_hit - ncodeunits(q)))
+end
+
+"""
+    unloaded_names(cat) -> Vector{Tuple{String,PkgId}}
+
+The names that the manuals of the standard libraries and project dependencies that are not
+loaded list in their `@docs` blocks, as `"Pkg.activate"`, each with its package. Their
+docstrings cannot be read until the package is loaded, but they can be searched for.
+"""
+function unloaded_names(cat::Catalog)
+    cat.unloaded_names === nothing || return cat.unloaded_names
+    names = Tuple{String,PkgId}[]
+    loaded = Set(keys(Base.loaded_modules))
+    places = Tuple{PkgId,String}[]
+    for name in readdir(Sys.STDLIB)
+        id = Base.identify_package(name)
+        id === nothing || id in loaded || push!(places, (id, joinpath(Sys.STDLIB, name, "docs", "src")))
+    end
+    for id in cat.unloaded
+        path = Base.locate_package(id)
+        path === nothing || push!(places, (id, joinpath(dirname(dirname(path)), "docs", "src")))
+    end
+    for (id, dir) in places
+        isdir(dir) || continue
+        for (root, _, files) in walkdir(dir), f in files
+            endswith(f, ".md") || continue
+            for name in docs_block_names(read(joinpath(root, f), String))
+                # a name in another module, such as a method of Base's that it documents
+                first = Base.first(split(name, '.'))
+                first == id.name || !isdefined(Main, Symbol(first)) || continue
+                full = first == id.name ? name : string(id.name, '.', name)
+                push!(names, (full, id))
+            end
+        end
+    end
+    return cat.unloaded_names = unique!(names)
+end
+
+# The names in the `@docs` blocks of a page of Markdown, without their signatures.
+function docs_block_names(md::AbstractString)
+    names = String[]
+    inblock = false
+    for line in eachline(IOBuffer(md))
+        s = strip(line)
+        if !inblock
+            inblock = startswith(s, "```@docs")
+        elseif startswith(s, "```")
+            inblock = false
+        else
+            m = match(r"^@?[A-Za-z_][\w!]*(?:\.@?[A-Za-z_][\w!]*)*", s)
+            m === nothing || push!(names, m.match)
+        end
+    end
+    return names
+end
+
+"""
+    search_unloaded(cat, query; limit = 50) -> Vector{Tuple{String,PkgId}}
+
+The names in [`unloaded_names`](@ref) that match `query`, best first.
+"""
+function search_unloaded(cat::Catalog, query::AbstractString; limit::Int=50)
+    q = lowercase(last(split(strip(query), '.')))
+    isempty(q) && return Tuple{String,PkgId}[]
+    scored = Tuple{Int,String,PkgId}[]
+    for (name, id) in unloaded_names(cat)
+        sc = name_score(q, lowercase(last(split(name, '.'))))
+        sc > 0 && push!(scored, (sc, name, id))
+    end
+    sort_by!(scored, x -> (-x[1], length(x[2]), x[2]))
+    return Tuple{String,PkgId}[(x[2], x[3]) for x in Iterators.take(scored, limit)]
 end
 
 const ROLE_BOOST = (project = 60, direct = 60, julia = 50, main = 50, stdlib = 20, indirect = 0, extension = 0)

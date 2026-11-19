@@ -31,8 +31,9 @@ Names mentioned in a docstring are links, and so are mentions of packages such a
 until you press `x`, and each example has a link that pastes its code at the `julia>` prompt.
 
 Use the arrow keys (or `h` `j` `k` `l`) to move, Enter to open, Tab to step through the links
-of a page, and Backspace to go back. Press `/` to search the names of every loaded module,
-and Ctrl-T to search the text of their docstrings instead. Press `y` to close the browser and
+of a page, and Backspace to go back. Press `/` to search: names come first, then the manual and the
+text of docstrings, and names in the manuals of packages that are not loaded yet, which load
+when picked. Ctrl-T narrows the search to names, then to text. Press `y` to close the browser and
 put the name being viewed at the `julia>` prompt, `e` to open the source of the selected link
 or name in your editor (set by `JULIA_EDITOR`), `w` to change the layout, and `?` to see every
 key. In terminals that support it, you can click on anything, scroll with the mouse wheel, and
