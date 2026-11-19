@@ -66,8 +66,8 @@ end
 const FIRST_CHAPTERS = ("getting-started", "variables", "functions", "control-flow", "types",
                         "methods", "modules", "arrays", "performance-tips", "workflow-tips")
 
-const START_KEYS = (("/", "search names, and the pages of the manual"),
-                    ("^T", "search the text of docstrings and the manual"),
+const START_KEYS = (("/", "search names, the manual and the text of docstrings"),
+                    ("^T", "search only names, or only text"),
                     ("click", "anything to open it; right-click opens its source"),
                     ("?", "every key, and what the marks mean"))
 

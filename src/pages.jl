@@ -1100,18 +1100,21 @@ function pkg_line!(pb::PageBuilder, cat::Catalog)
     addline!(pb, "    ", ("Pkg", nothing, ManualTarget(cat.manual[i].path, "")))
 end
 
-function unloaded_page(id::PkgId, width::Int)
+function unloaded_page(id::PkgId, width::Int, then::String="")
     pb = PageBuilder(width)
+    stdlib = Base.is_stdlib(id)
     addline!(pb)
-    addline!(pb, "  ", (id.name, :REPL_DocBrowser_title))
-    addline!(pb, "  ", ("direct dependency · not loaded", :REPL_DocBrowser_dim))
-    add_links!(pb, id, nothing, :direct)
+    addline!(pb, "  ", (isempty(then) ? id.name : then, :REPL_DocBrowser_title))
+    addline!(pb, "  ", (stdlib ? "standard library · not loaded" : "direct dependency · not loaded", :REPL_DocBrowser_dim))
+    add_links!(pb, id, nothing, stdlib ? :stdlib : :direct)
     rule!(pb)
+    what = isempty(then) ? "its documentation is" : "the documentation of $then is"
+    whose = stdlib ? "$(id.name) is a standard library" : "The active project depends on $(id.name)"
     addflow!(pb, "  ", Any[w * " " for w in split(
-        "The active project depends on $(id.name), but it has not been loaded yet, so its " *
-        "documentation is not available. Loading it runs import $(id.name) in Main.")])
+        "$whose, but it has not been loaded yet, so $what not available. Loading it runs " *
+        "import $(id.name) in Main.")])
     addline!(pb)
-    addline!(pb, "  ", (" Load $(id.name) ", :REPL_DocBrowser_link_active, LoadTarget(id)),
+    addline!(pb, "  ", (" Load $(id.name) ", :REPL_DocBrowser_link_active, LoadTarget(id, then)),
              ("  or press ⏎", :REPL_DocBrowser_dim))
     addline!(pb)
     return Page(pb)

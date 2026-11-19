@@ -12,13 +12,16 @@ SideRow(role::Symbol, pkg, unloaded) = SideRow(role, pkg, unloaded, nothing)
 is_header(r::SideRow) = r.pkg === nothing && r.unloaded === nothing && r.page === nothing && r.role !== :start
 
 struct NameRow
-    kind::Symbol # :about, :header, :entry, :heading (of a manual page) or :hit (of a search)
+    # :about, :header, :entry, :heading (of a manual page), :hit (of a search), or :unloaded (a
+    # name a search found in the manual of a package that is not loaded)
+    kind::Symbol
     entry::Union{Nothing,NameEntry}
     group::Symbol
     count::Int
     hit::Union{Nothing,ManualHit}
+    target::Union{Nothing,LoadTarget} # for :unloaded
 end
-NameRow(kind::Symbol, entry, group::Symbol, count::Int) = NameRow(kind, entry, group, count, nothing)
+NameRow(kind::Symbol, entry, group::Symbol, count::Int, hit=nothing) = NameRow(kind, entry, group, count, hit, nothing)
 
 mutable struct ListState
     cursor::Int
@@ -42,7 +45,7 @@ struct Snapshot
     override::Any
     query::Union{Nothing,String}
     internal::Bool
-    textsearch::Bool
+    searchmode::Symbol
     link::Int       # the link that was selected, which is often the one that was followed
     title::String   # of the page, to say where going back or forward leads
 end
@@ -85,7 +88,7 @@ mutable struct Browser
     last_click::Tuple{Float64,Any}
     lock::ReentrantLock
     flags::Dict{Any,Set{Symbol}} # the parts of each page that are unfolded
-    textsearch::Bool             # search docstring text instead of names
+    searchmode::Symbol           # what a search looks in: :all, or only :names or :text
     layout::Symbol               # :auto, or a number of panes: :one, :two or :three
     color::Bool
     # Text selected in the documentation, from where the drag started to where it is now,
@@ -95,6 +98,9 @@ mutable struct Browser
     clicks::NTuple{4,Float64}    # time, row and column of the last press, and the click count
     under_help::Any              # the page, scroll and link that the help covers
     manual_hits::Vector{ManualHit} # what a search finds in the manual
+    manual_titles::Int             # how many of those are titles or headings, which come first
+    text_results::Vector{NameEntry} # what a search for everything finds only in docstrings' text
+    unloaded_hits::Vector{Tuple{String,PkgId}} # what it finds in packages that are not loaded
     indirect::Bool               # whether a search includes indirect dependencies
     hidden::Int                  # how many names a search found in indirect dependencies, but left out
     # The card that previews what the pointer rests on: where the pointer came to rest and when,
@@ -140,9 +146,9 @@ function Browser(term::REPL.Terminals.TextTerminal, cat::Catalog=Catalog())
                 Set(DEFAULT_EXPANDED), Set{Symbol}(), Main, false, nothing, false,
                 NameEntry[], nothing, nothing, 0, 0, 0, Dict{Tuple{Any,Int,Vector{Symbol}},Page}(),
                 Snapshot[], Snapshot[], Hit[], nothing, "", false, false, nothing, String[],
-                (0.0, nothing), ReentrantLock(), Dict{Any,Set{Symbol}}(), false, LAYOUT[],
+                (0.0, nothing), ReentrantLock(), Dict{Any,Set{Symbol}}(), :all, LAYOUT[],
                 get(term.out_stream, :color, true)::Bool || REPL.Terminals.hascolor(term),
-                nothing, false, (0.0, 0.0, 0.0, 0.0), nothing, ManualHit[], SEARCH_INDIRECT[], 0, (0, 0), Inf, nothing,
+                nothing, false, (0.0, 0.0, 0.0, 0.0), nothing, ManualHit[], 0, NameEntry[], Tuple{String,PkgId}[], SEARCH_INDIRECT[], 0, (0, 0), Inf, nothing,
                 tip_order(), 1, false, nothing, nothing, "", nothing, nothing, "", Base.get_world_counter(),
                 0, "", terminal_theme(), nothing, browser_faces(terminal_theme(), nothing))
     any(p -> p.role in (:project, :direct), cat.pkgs) || push!(b.expanded, :indirect)
@@ -260,9 +266,12 @@ end
 function refresh_names!(b::Browser)
     rows = NameRow[]
     if b.query !== nothing
-        # The manual comes first, unless the query is exactly a name.
+        # The manual comes first when a title or heading in it matches, unless the query is
+        # exactly a name. Matches in the text of its sections do not put it above names.
         q = lowercase(last(split(b.query, '.')))
-        names_first = !isempty(b.results) && lowercase(String(b.results[1].name)) == q
+        names_first = b.manual_titles == 0 ||
+            !isempty(b.results) && lowercase(String(b.results[1].name)) == q ||
+            !isempty(b.unloaded_hits) && lowercase(last(split(b.unloaded_hits[1][1], '.'))) == q
         names_first && add_name_hits!(rows, b)
         if !isempty(b.manual_hits)
             push!(rows, NameRow(:header, nothing, :manual_hits, length(b.manual_hits)))
@@ -273,6 +282,12 @@ function refresh_names!(b::Browser)
             end
         end
         names_first || add_name_hits!(rows, b)
+        if !isempty(b.text_results)
+            push!(rows, NameRow(:header, nothing, :text_hits, length(b.text_results)))
+            :text_hits in b.collapsed || append!(rows, (NameRow(:entry, e, :text_hits, 0) for e in b.text_results))
+        end
+        # what was left out of every group
+        b.hidden > 0 && push!(rows, NameRow(:more, nothing, :none, b.hidden))
     elseif on_start(b)
         push!(rows, NameRow(:about, nothing, :none, 0))
         for k in eachindex(START_SECTIONS)
@@ -328,12 +343,18 @@ end
 
 # The names a search finds, under a heading when the manual has results too.
 function add_name_hits!(rows::Vector{NameRow}, b::Browser)
-    isempty(b.manual_hits) || isempty(b.results) || push!(rows, NameRow(:header, nothing, :name_hits, length(b.results)))
-    isempty(b.manual_hits) || !(:name_hits in b.collapsed) || return
-    for e in b.results
-        push!(rows, NameRow(:entry, e, e.kind, 0))
-    end
-    b.hidden > 0 && push!(rows, NameRow(:more, nothing, :none, b.hidden))
+    names = NameRow[NameRow(:entry, e, e.kind, 0) for e in b.results]
+    unloaded = NameRow[NameRow(:unloaded, nothing, :name_hits, 0, nothing, LoadTarget(id, name))
+                       for (name, id) in b.unloaded_hits]
+    # The names of packages that are not loaded come after the others, but for one that is
+    # exactly the query when no loaded name is.
+    q = lowercase(last(split(b.query, '.')))
+    exact(r) = lowercase(String(r.kind === :entry ? r.entry.name : last(split(r.target.then, '.')))) == q
+    k = isempty(names) || !exact(names[1]) ? count(exact, unloaded) : 0
+    hits = [unloaded[1:k]; names; unloaded[k+1:end]]
+    others = !isempty(b.manual_hits) || !isempty(b.text_results)
+    others && !isempty(hits) && push!(rows, NameRow(:header, nothing, :name_hits, length(hits)))
+    (!others || !(:name_hits in b.collapsed)) && append!(rows, hits)
 end
 
 side_row(b::Browser) = get(b.side_rows, b.side.cursor, nothing)
@@ -417,7 +438,7 @@ list_offset(b::Browser, pane::Symbol) = pane === :names ? names_offset(b) : 0
 ## Navigation ##
 
 snapshot(b::Browser) = Snapshot(b.mod, b.focus, b.source, row_key(side_row(b)), row_key(name_row(b)),
-                                b.doc_scroll, b.override, b.query, b.internal, b.textsearch, b.link,
+                                b.doc_scroll, b.override, b.query, b.internal, b.searchmode, b.link,
                                 key_title(b, current_key(b)))
 
 row_key(::Nothing) = nothing
@@ -430,7 +451,7 @@ function restore!(b::Browser, s::Snapshot)
     b.mod, b.focus, b.source, b.override, b.internal = s.mod, s.focus, s.source, s.override, s.internal
     b.query = s.query
     b.typing = false
-    b.textsearch = s.textsearch
+    b.searchmode = s.searchmode
     run_search!(b)
     refresh_side!(b)
     i = findfirst(r -> row_key(r) == s.side, b.side_rows)
@@ -611,6 +632,7 @@ function current_key(b::Browser)
     row = name_row(b)
     row !== nothing && row.kind in (:hit, :pkgpage) && return ManualTarget(row.hit.path, "")
     row !== nothing && row.kind === :entry && return row.entry
+    row !== nothing && row.kind === :unloaded && return row.target
     # a search's group heading, or a search with no results, shows nothing
     b.query === nothing || return :none
     return ModuleTarget(b.mod)
@@ -860,6 +882,7 @@ function hit_subject(b::Browser, action)
         row.kind === :entry && return row.entry
         row.kind === :hit && return SourceTarget(row.hit.path, hit_line(b.cat, row.hit))
         row.kind === :pkgpage && return SourceTarget(row.hit.path, 1)
+        row.kind === :unloaded && return row.target
         p = side_page(b)
         return p === nothing ? ModuleTarget(b.mod) : SourceTarget(p.path, 1)
     elseif kind === :load
@@ -935,7 +958,7 @@ function page(b::Browser, key, width::Int)
             key isa NameEntry ? entry_page(b.cat, key, width, flags) :
             key isa ModuleTarget ? module_page(b.cat, key.mod, width) :
             key isa SectionTarget ? section_page(b.cat, key.role, width) :
-            key isa LoadTarget ? unloaded_page(key.id, width) :
+            key isa LoadTarget ? unloaded_page(key.id, width, key.then) :
             key isa ManualTarget ? manual_page(b.cat, key.path, width) :
             key === :start ? start_page(b.cat, width, b.tips[b.tip], b.tip) :
             key === :help ? help_page(b.cat, width) : Page(PageBuilder(width))
@@ -1034,7 +1057,7 @@ function hint_segments(b::Browser)
     elseif b.help
         return [("esc", "close")]
     elseif b.typing
-        return [("↑↓", "choose"), ("⏎", "open"), ("^T", b.textsearch ? "names" : "text"),
+        return [("↑↓", "choose"), ("⏎", "open"), ("^T", NEXT_MODE_LABEL[b.searchmode]),
                 ("^A", b.indirect ? "direct only" : "+indirect"), ("⇥", "results"), ("esc", "cancel")]
     elseif b.focus === :doc
         p = page(b, current_key(b), doc_width(b))
@@ -1091,6 +1114,7 @@ function describe(b::Browser, action)
         row.kind === :pkgpage && return "a page of $(display_name(b.mod))'s manual · ⏎ read · right-click: source"
         row.kind === :hit && return "the manual: $(manual_title(b.cat, row.hit.path)) · ⏎ open"
         row.kind === :more && return "⏎ search indirect dependencies too (^A)"
+        row.kind === :unloaded && return "$(row.target.then) · ⏎ load $(row.target.id.name) and read it"
         row.kind === :about && side_page(b) !== nothing && return "the top of the page"
         row.kind === :about && return "the documentation of $(display_name(b.mod))"
         e = row.entry::NameEntry
@@ -1107,9 +1131,9 @@ function describe(b::Browser, action)
     elseif kind === :copylink
         return "⧉ copies a link to this place, to paste at the julia> prompt (c)"
     elseif kind === :search
-        return "/ search the $(b.textsearch ? "text of docstrings" : "names") of every loaded module"
+        return "/ search " * MODE_DESCRIPTION[b.searchmode]
     elseif kind === :toggle_text
-        return "⇄ search $(b.textsearch ? "names" : "the text of docstrings") instead (^T)"
+        return "⇄ search " * MODE_DESCRIPTION[next_mode(b.searchmode)] * " instead (^T)"
     elseif kind === :project
         proj = Base.active_project()
         return proj === nothing ? nothing : "the active project: " * Base.contractuser(proj)
@@ -1225,18 +1249,20 @@ end
 # The right of the header. A higher `level` leaves out more, for narrow terminals.
 function header_right(b::Browser, level::Int)
     right = Seg[]
-    mode = b.textsearch ? "text" : "names"
+    mode = String(b.searchmode)
     if b.query === nothing
-        push!(right, Seg(" / search all $mode ", nothing, (:search,)))
+        push!(right, Seg(b.searchmode === :all ? " / search " : " / search $mode ", nothing, (:search,)))
     else
         # The field being typed into stands out; once typing stops it is only shaded.
         face = b.typing ? :REPL_DocBrowser_searchbox : :REPL_DocBrowser_unfocused
         q = b.query
         text = b.typing ? string(" ", first(q, b.qcol), "▏", chop(q; head=b.qcol, tail=0)) : string(" ", q, " ")
         pad = level == 0 ? max(0, 22 - textwidth(text)) : 0
-        level < 2 && push!(right, Seg(" "), Seg(" " * mode * " ⇄ ", face, (:toggle_text,)))
+        # a search for everything says nothing of what it looks in
+        level < 2 && b.searchmode !== :all && push!(right, Seg(" "), Seg(" " * mode * " ⇄ ", face, (:toggle_text,)))
         push!(right, Seg(text * ' '^pad, face, (:search,)))
-        level == 0 && push!(right, Seg(string(" ", length(b.results), " found "), :REPL_DocBrowser_dim))
+        found = length(b.results) + length(b.text_results) + length(b.unloaded_hits)
+        level == 0 && push!(right, Seg(string(" ", found, " found "), :REPL_DocBrowser_dim))
     end
     push!(right, Seg("  "), Seg("?", :REPL_DocBrowser_key, (:help,)),
           Seg("  "), Seg("✕", :REPL_DocBrowser_key, (:quit,)), Seg(" "))
@@ -1394,6 +1420,13 @@ function list_line(b::Browser, pane::Symbol, i::Int, x::Int, w::Int, row::Int)
             put_seg!(rb, h.text, h.level <= 2 ? :REPL_DocBrowser_pane_title : nothing, action)
         elseif r.kind === :more
             put_seg!(rb, " + $(r.count) in indirect dependencies (^A)", :REPL_DocBrowser_dim, action)
+        elseif r.kind === :unloaded
+            t = r.target::LoadTarget
+            put_seg!(rb, "   ")
+            put_match!(rb, String(chop(t.then; head=length(t.id.name) + 1, tail=0)), nothing, action)
+            where = " " * t.id.name
+            room = w - width(rb) - 1
+            room > 4 && put_seg!(rb, ' '^max(1, room - textwidth(where)) * first(where, room), :REPL_DocBrowser_dim)
         elseif r.kind === :hit
             # a section of the manual with its page on the right, or a page with its part of the docs
             h = r.hit::ManualHit
@@ -1410,7 +1443,8 @@ function list_line(b::Browser, pane::Symbol, i::Int, x::Int, w::Int, row::Int)
                 end
             end
         elseif r.kind === :header
-            title = r.group === :manual_hits ? "In the manual" : r.group === :name_hits ? "Names" : kind_title(r.group)
+            title = r.group === :manual_hits ? "In the manual" : r.group === :name_hits ? "Names" :
+                r.group === :text_hits ? "In docstrings" : kind_title(r.group)
             put_seg!(rb, r.group in b.collapsed ? " ▸ " : " ▾ ", :REPL_DocBrowser_dim, action)
             put_seg!(rb, title, :REPL_DocBrowser_section, action)
             put_seg!(rb, " $(r.count)", :REPL_DocBrowser_dim, action)
@@ -1501,7 +1535,7 @@ key_title(b::Browser, @nospecialize(key)) =
     key isa NameEntry ? display_name(key) :
     key isa ModuleTarget ? display_name(key.mod) :
     key isa SectionTarget ? getfield(SECTION_TITLES, key.role) :
-    key isa LoadTarget ? key.id.name :
+    key isa LoadTarget ? (isempty(key.then) ? key.id.name : key.then) :
     key isa ManualTarget ? manual_title(b.cat, key.path) :
     key === :start ? "Start" :
     key === :help ? "Keys and mouse" : ""
@@ -1579,7 +1613,7 @@ function draw_doc(b::Browser, x::Int, w::Int)
     for k in 1:n
         li = b.doc_scroll + k
         line = li <= length(p.lines) ? copy_line(p.lines[li]) : AnnotatedString("")
-        b.textsearch && b.query !== nothing && mark_words!(line, b.query)
+        b.searchmode !== :names && b.query !== nothing && mark_words!(line, b.query)
         li == b.mark && startswith(String(line), ' ') &&
             (line = annotatedstring(styled("▶", :REPL_DocBrowser_key), line[2:end]))
         for (si, s) in enumerate(p.spots)
@@ -2314,6 +2348,8 @@ function activate!(b::Browser, pane::Symbol)
             b.focus = :doc
         elseif row.kind === :hit
             open_manual!(b, row.hit.path, hit_heading(b.cat, row.hit))
+        elseif row.kind === :unloaded
+            follow!(b, row.target)
         elseif row.kind === :more
             toggle_indirect!(b)
         else
@@ -2384,10 +2420,17 @@ function next_tip!(b::Browser, dir::Int)
     filter!(kv -> kv.first[1] !== :start, b.pages) # drawn with the old tip
 end
 
+const MODE_DESCRIPTION = Dict(:all => "names, the manual and the text of docstrings",
+                              :names => "names and the titles of the manual",
+                              :text => "the text of docstrings and the manual")
+const NEXT_MODE_LABEL = Dict(:all => "names", :names => "text", :text => "all")
+
+next_mode(m::Symbol) = m === :all ? :names : m === :names ? :text : :all
+
 function toggle_textsearch!(b::Browser)
-    b.textsearch = !b.textsearch
+    b.searchmode = next_mode(b.searchmode)
     b.query === nothing || update_search!(b)
-    b.status = b.textsearch ? "Searching docstring text" : "Searching names"
+    b.status = "Searching " * MODE_DESCRIPTION[b.searchmode]
 end
 
 function jump_heading!(b::Browser, dir::Int)
@@ -2416,11 +2459,34 @@ end
 
 function run_search!(b::Browser)
     q = b.query
-    found = q === nothing ? NameEntry[] : b.textsearch ? search_text(b.cat, q; internal=b.internal) :
-        search(b.cat, q; internal=b.internal)
-    b.results = b.indirect ? found : filter(e -> !is_indirect(b.cat, e), found)
-    b.hidden = length(found) - length(b.results)
-    b.manual_hits = q === nothing ? ManualHit[] : search_manual(b.cat, q; text=b.textsearch)
+    m = b.searchmode
+    names = q === nothing || m === :text ? NameEntry[] : search(b.cat, q; internal=b.internal)
+    text = q === nothing || m === :names ? NameEntry[] : search_text(b.cat, q; internal=b.internal)
+    keep(found) = b.indirect ? found : filter(e -> !is_indirect(b.cat, e), found)
+    if m === :all
+        # the names that only the text of their docstrings matches, after the names
+        named = Set((e.mod, e.name) for e in names)
+        text = filter(e -> !((e.mod, e.name) in named), text)
+        b.results, b.text_results = keep(names), keep(text)
+    else
+        b.results, b.text_results = keep(m === :text ? text : names), NameEntry[]
+    end
+    b.hidden = length(names) + length(text) - length(b.results) - length(b.text_results)
+    b.unloaded_hits = q === nothing || m === :text ? Tuple{String,PkgId}[] : search_unloaded(b.cat, q)
+    titles = q === nothing || m === :text ? ManualHit[] : search_manual(b.cat, q)
+    b.manual_titles = length(titles)
+    b.manual_hits = m === :names || q === nothing ? titles :
+        m === :text ? search_manual(b.cat, q; text=true) : with_text_hits(b.cat, q, titles)
+end
+
+# The manual's titles and headings that match, then the sections whose text does.
+function with_text_hits(cat::Catalog, q::AbstractString, titles::Vector{ManualHit}; limit::Int=30)
+    hits = copy(titles)
+    seen = Set((h.path, h.heading) for h in hits)
+    for h in search_manual(cat, q; text=true)
+        (h.path, h.heading) in seen || push!(hits, h)
+    end
+    return first(hits, limit)
 end
 
 function is_indirect(cat::Catalog, e::NameEntry)
@@ -2467,6 +2533,9 @@ function handle_typing!(b::Browser, ev::KeyEvent)
             open_manual!(b, row.hit.path, hit_heading(b.cat, row.hit))
         elseif row !== nothing && row.kind === :more
             toggle_indirect!(b)
+        elseif row !== nothing && row.kind === :unloaded
+            b.typing = false
+            follow!(b, row.target)
         elseif row === nothing || row.entry === nothing
             b.status = "No matches"
         else
@@ -2907,10 +2976,12 @@ This browser shows Julia's manual, under *Julia*, and the loaded packages, under
 
 # Finding things
 
-  * `/`: search the names of every loaded module. `Plots.pl` searches inside modules matching `Plots`.
+  * `/`: search everything: the names of every loaded module first, then the manual and the text of
+    docstrings, and the names that the manuals of packages that are not loaded list. `Plots.pl`
+    searches inside modules matching `Plots`.
   * While typing a search, the readline keys edit it: `←` `→`, `Home` `End`, `^W`, `^K`, `^Y`,
     `Alt-⌫`. `→` at its end goes on to the results.
-  * `Ctrl-T`: switch between searching names and searching the text of docstrings.
+  * `Ctrl-T`: search only names, then only text, then everything again.
   * `Ctrl-A`: include indirect dependencies in searches, or leave them out again.
   * `i`: show or hide internal (non-public) names.
   * `a`: unfold every package section, including indirect dependencies.

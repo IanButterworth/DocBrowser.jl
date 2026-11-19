@@ -130,6 +130,8 @@ strip_ansi(s) = replace(s, r"\e\[[0-9;?]*[a-zA-Z]|\e\]8;[^\e]*\e\\\\" => "")
 end
 
 @testset "catalog" begin
+    md = "text\n```@docs\nPkg.activate\nBase.sum(itr)\n@time\n```\n```julia\nnot_this\n```\n"
+    @test DocBrowser.docs_block_names(md) == ["Pkg.activate", "Base.sum", "@time"]
     cat = Catalog()
     @test any(p -> p.mod === Base && p.role === :julia, cat.pkgs)
     @test any(p -> p.mod === REPL, cat.pkgs)
@@ -318,6 +320,8 @@ end
         mkpath(joinpath(dir, link, "src"))
         write(joinpath(dir, link, "Project.toml"), "name = \"$link\"\nuuid = \"$linkuuid\"\n")
         write(joinpath(dir, link, "src", "$link.jl"), "module $link\nexport hello\n\"Says hello.\"\nhello() = 1\nend\n")
+        mkpath(joinpath(dir, link, "docs", "src"))
+        write(joinpath(dir, link, "docs", "src", "index.md"), "# $link\n\n```@docs\nhello\n```\n")
         env = joinpath(dir, "env")
         mkpath(env)
         write(joinpath(env, "Project.toml"), "[deps]\n$name = \"$uuid\"\n$bad = \"$baduuid\"\n$link = \"$linkuuid\"\n")
@@ -388,6 +392,12 @@ end
             @test Threads.threadid(t) == Threads.threadid()
             b.loads = nothing
             handle!(b, KeyEvent('j'))
+            # A search finds the names that the manual of a package that is not loaded lists.
+            foreach(c -> handle!(b, KeyEvent(c)), "/hello")
+            i = findfirst(r -> r.kind === :unloaded, b.name_rows)
+            @test i !== nothing && b.name_rows[i].target == DocBrowser.LoadTarget(Base.PkgId(linkuuid, link), "$link.hello")
+            @test occursin(r"hello +DocBrowserLoadLink", strip_ansi(String(DocBrowser.list_line(b, :names, i, 1, 60, 2))))
+            handle!(b, KeyEvent(:escape))
             # A `docs:` link to a name in a package that is not loaded, as shared from another
             # session, loads the package and then opens the name.
             t = DocBrowser.place_target("docs: $link.hello", b.cat)
@@ -499,15 +509,23 @@ end
 
     b = Browser(fake_terminal(""))
     frame(b)
+    # A search looks at everything, and says nothing of what it looks in: the names that only
+    # the text of their docstrings matches come after the names.
     handle!(b, KeyEvent('/'))
-    handle!(b, KeyEvent('t', DocBrowser.CTRL))
-    @test b.textsearch
     for c in "sum of"
         handle!(b, KeyEvent(c))
     end
-    @test !isempty(b.results)
-    # The search field is drawn with its own face while typing.
-    @test occursin("sum of", strip_ansi(frame(b)[1]))
+    @test b.searchmode === :all && !isempty(b.text_results)
+    @test any(r -> r.kind === :header && r.group === :text_hits, b.name_rows)
+    header = strip_ansi(frame(b)[1])
+    @test occursin("sum of", header) && !occursin("⇄", header)
+    # ^T narrows it to names, then to text, then looks at everything again.
+    handle!(b, KeyEvent('t', DocBrowser.CTRL))
+    @test b.searchmode === :names && isempty(b.text_results) && occursin("names ⇄", strip_ansi(frame(b)[1]))
+    handle!(b, KeyEvent('t', DocBrowser.CTRL))
+    @test b.searchmode === :text && !isempty(b.results)
+    handle!(b, KeyEvent('t', DocBrowser.CTRL))
+    @test b.searchmode === :all
     handle!(b, KeyEvent(:escape))
 
     DocBrowser.follow!(b, NameTarget(@__MODULE__, :Shape))
@@ -601,7 +619,7 @@ end
     frame(b)
     @test occursin("x extended", footer()) && occursin("{ } headings", footer())
     handle!(b, KeyEvent('/'))
-    @test occursin("^T text", footer())
+    @test occursin("^T names", footer())
     handle!(b, KeyEvent(:escape))
 
     # Narrow terminals keep `? help` and offer other layouts.

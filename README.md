@@ -50,7 +50,9 @@ code at the `julia>` prompt.
 ### Keys and mouse
 
 - Arrow keys or `h` `j` `k` `l` move, Enter opens, Tab steps through a page's links, Backspace goes back.
-- `/` searches the names of every loaded module, and Ctrl-T searches the text of their docstrings.
+- `/` searches names first, then the manual and the text of docstrings, and also the names that
+  manuals of packages not loaded yet list, which load when picked. Ctrl-T narrows it to names,
+  then to text.
 - `y` closes the browser and puts the name being viewed at the `julia>` prompt.
 - `e` opens the source in your editor (`JULIA_EDITOR`), `w` changes the layout, `?` lists every key.
 - In terminals that support it, click anything, scroll, and use the mouse's back and forward buttons.
