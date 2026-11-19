@@ -150,6 +150,15 @@ function within(f, timeout::Real)
     return ok
 end
 
+# Reading the terminal, setting its modes and drawing on it, from `REPL.TerminalMenus` where
+# Julia has these, and otherwise from a copy of them.
+@static if isdefined(REPL.TerminalMenus, :readevent)
+    const TM = REPL.TerminalMenus
+else
+    include("terminalmenus/TerminalMenusCopy.jl")
+    const TM = TerminalMenusCopy
+end
+
 include("catalog.jl")
 include("pages.jl")
 include("manual.jl")
