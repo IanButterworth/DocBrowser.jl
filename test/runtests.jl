@@ -350,10 +350,15 @@ end
             b.side.cursor = row - 1
             DocBrowser.move!(b, :side, 1)
             @test DocBrowser.current_key(b) == DocBrowser.LoadTarget(id)
-            # The names of the module shown before are not listed under it.
-            @test occursin("not loaded", String(DocBrowser.pane_title(b, :names, 1, 40)))
+            # The names of the module shown before are not listed under it, but a row saying it
+            # is not loaded, which → moves to as for any package.
+            @test occursin("$name  not loaded", String(DocBrowser.pane_title(b, :names, 1, 40)))
             listed = String.(DocBrowser.draw_list(b, :names, 1, 40))
-            @test occursin("load it", listed[1]) && all(isempty ∘ strip, listed[2:end])
+            @test all(isempty ∘ strip, listed)
+            b.focus = :side
+            handle!(b, KeyEvent(:right))
+            @test b.focus === :names && DocBrowser.current_key(b) == DocBrowser.LoadTarget(id)
+            # and where ⏎ loads it, as on its row in the contents
             b.live = true
             handle!(b, KeyEvent(:enter))
             # It loads in a task, in a panel that says it is precompiling, and the browser can

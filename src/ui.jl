@@ -369,9 +369,9 @@ side_row(b::Browser) = get(b.side_rows, b.side.cursor, nothing)
 function side_placeholder(b::Browser)
     b.query === nothing && b.source === :side || return nothing
     row = side_row(b)
-    (row === nothing || row.pkg !== nothing || row.page !== nothing || row.role === :start) && return nothing
-    # a package that is not loaded lists what its source documents, if anything
-    row.unloaded === nothing || isempty(unloaded_rows(b.cat, row.unloaded)) || return nothing
+    # a package that is not loaded has a row saying so, and what its source documents
+    (row === nothing || row.pkg !== nothing || row.page !== nothing || row.role === :start ||
+     row.unloaded !== nothing) && return nothing
     return row
 end
 
@@ -1549,11 +1549,6 @@ function draw_list(b::Browser, pane::Symbol, x::Int, w::Int)
         for k in 1:n
             push!(lines, fit("", w))
         end
-        if placeholder.unloaded !== nothing && n >= 1
-            rb = RowBuilder(b, 3, x)
-            put_seg!(rb, " Press ⏎ to load it")
-            lines[1] = fit(build(rb), w)
-        end
         return lines
     end
     ls = pane === :side ? b.side : b.names
@@ -1583,10 +1578,7 @@ function pane_title(b::Browser, pane::Symbol, x::Int, w::Int)
     elseif pane === :names
         placeholder = side_placeholder(b)
         if placeholder !== nothing
-            name = placeholder.unloaded === nothing ?
-                getfield(SECTION_TITLES, placeholder.role) : placeholder.unloaded.name
-            put_seg!(rb, " " * name, face, (:focus, :names))
-            placeholder.unloaded === nothing || put_seg!(rb, " not loaded")
+            put_seg!(rb, " " * getfield(SECTION_TITLES, placeholder.role), face, (:focus, :names))
         elseif names_offset(b) == 1
             return list_line(b, :names, 1, x, w, 2)
         else
@@ -2379,6 +2371,8 @@ function activate!(b::Browser, pane::Symbol)
             toggle_group!(b, row.group)
         elseif row.kind === :page
             toggle_page!(b, row.hit.path)
+        elseif row.kind === :about && side_unloaded(b) !== nothing
+            load_package!(b, side_unloaded(b))
         elseif row.kind === :about || row.kind === :heading || row.kind === :pkgpage
             b.focus = :doc
         elseif row.kind === :hit
@@ -2432,7 +2426,7 @@ function focus_right!(b::Browser)
     if b.focus === :side
         row = side_row(b)
         row === nothing ? nothing : is_header(row) ? toggle_section!(b, row.role) :
-            row.unloaded !== nothing ? (b.focus = :doc) : (b.focus = :names; b.source = :names)
+            (b.focus = :names; b.source = :names)
     elseif b.focus === :names
         row = name_row(b)
         if row !== nothing && row.kind === :entry && row.entry.kind === :module
