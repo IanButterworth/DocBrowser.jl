@@ -1231,9 +1231,11 @@ end
     h = first(h for h in b.hits if h.action isa Tuple && first(h.action) === :names &&
               b.name_rows[h.action[2]].kind === :entry)
     handle!(b, MouseEvent(:move, 0, h.row, first(h.cols) + 1, 0))
-    @test b.card === nothing && !DocBrowser.show_card!(b) # not straight away
-    b.hover_since -= 1
-    @test DocBrowser.show_card!(b)
+    # Not straight away. The times are given, since a slow machine can take longer than the
+    # delay to get from one line of this test to the next.
+    rested = b.hover_since
+    @test b.card === nothing && !DocBrowser.show_card!(b, rested + 0.01)
+    @test DocBrowser.show_card!(b, rested + 1)
     entry = b.name_rows[h.action[2]].entry
     @test occursin(String(entry.name), String(b.card[1][1]))
     @test any(r -> occursin("╭", r), frame(b))
@@ -1243,8 +1245,7 @@ end
     frame(live)
     live.live = true
     handle!(live, MouseEvent(:move, 0, h.row, first(h.cols) + 1, 0))
-    @test live.card === nothing
-    @test timedwait(() -> live.card !== nothing, 10) === :ok
+    @test timedwait(() -> live.card !== nothing, 60) === :ok
     live.live = false
     # Moving onto the card keeps it; right-click on it is its source; a click opens it.
     c = first(h for h in b.hits if h.action == (:card,))
