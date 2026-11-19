@@ -1726,7 +1726,8 @@ function overlay_card!(b::Browser, rows::Vector{AnnotatedString{String}})
     h = length(lines) + 2
     r0, c0 = b.hover_at
     top = r0 + h <= b.height - 1 ? r0 + 1 : max(2, r0 - h)
-    left = clamp(c0, 1, max(1, b.width - cw + 1))
+    # a little to the right of the pointer, so that it does not cover what it describes
+    left = clamp(c0 + 2, 1, max(1, b.width - cw + 1))
     border = :REPL_DocBrowser_border
     box = AnnotatedString{String}[styled("╭" * "─"^(cw - 2) * "╮", border)]
     for l in lines
