@@ -547,7 +547,7 @@ function follow!(b::Browser, t::Target)
     elseif t isa URLTarget
         open_url(b, t.url)
     elseif t isa LoadTarget
-        load_package!(b, t.id)
+        load_package!(b, t.id; then=t.then)
     elseif t isa SourceTarget
         edit_source!(b, t)
     elseif t isa ManualTarget
@@ -668,17 +668,18 @@ function suspend(f, b::Browser)
 end
 
 """
-    load_package!(b, id)
+    load_package!(b, id; then = "")
 
 Load the package `id` with `import` in `Main`, in a task of its own, and show it once it is
-loaded. Meanwhile what loading prints, such as precompilation, shows in a panel above the
+loaded, or the name `then` in it. Meanwhile what loading prints, such as precompilation, shows in a panel above the
 footer, and the browser can still be used.
 """
-function load_package!(b::Browser, id::PkgId)
+function load_package!(b::Browser, id::PkgId; then::String="")
     # The precompile workload must not load whatever the active project depends on.
     Base.generating_output() && return
     loading(b) && return (b.status = "Already " * lowercasefirst(b.loading); nothing)
     b.console = ["julia> import " * id.name]
+    start = current_key(b)
     # Loading prints nothing while it precompiles, which can take minutes, so say so.
     precompiled = Base.isprecompiled(id)
     what = Ref((precompiled ? "Loading " : "Precompiling ") * id.name)
@@ -702,11 +703,14 @@ function load_package!(b::Browser, id::PkgId)
     function done(ok)
         ok || return
         b.console = nothing
-        # Go to the package only if it is still what the browser shows.
+        # Go to the package, or to the name asked for in it, only if nothing else was opened
+        # while it loaded.
         go = current_key(b) == LoadTarget(id)
+        stayed = current_key(b) == start
         # The package's bindings are only visible in the latest world.
         b.world = Base.get_world_counter()
-        in_world(show_loaded!, b, id, go)
+        in_world(show_loaded!, b, id, go && isempty(then))
+        isempty(then) || !stayed || in_world(open_name!, b, then)
     end
     in_console(load, done, b, what)
     return
@@ -778,6 +782,11 @@ end
 
 # A line of output as plain text, as a terminal would leave it after any carriage return.
 console_text(line::AbstractString) = replace(last(split(line, '\r')), r"\e\[[0-9;?]*[A-Za-z]" => "")
+
+function open_name!(b::Browser, name::String)
+    t = resolve_ref(name, Main, b.cat)
+    t === nothing ? (b.status = "No documentation for " * name) : follow!(b, t)
+end
 
 function show_loaded!(b::Browser, id::PkgId, go::Bool=true)
     b.cat = Catalog()

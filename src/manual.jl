@@ -111,7 +111,15 @@ end
 
 function name_place(name::AbstractString, cat::Catalog)
     t = resolve_ref(name, Main, cat)
-    return t isa URLTarget ? nothing : t
+    t === nothing || return t isa URLTarget ? nothing : t
+    # A name in a package that is not loaded yet, such as a stdlib in a new session: the
+    # package is loaded, and then the name opened.
+    name = String(strip(name))
+    root = String(first(split(name, '.')))
+    Base.isidentifier(root) || return nothing
+    id = Base.identify_package(root)
+    (id === nothing || haskey(Base.loaded_modules, id)) && return nothing
+    return LoadTarget(id, name)
 end
 
 """

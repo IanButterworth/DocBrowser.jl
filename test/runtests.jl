@@ -313,9 +313,14 @@ end
         mkpath(joinpath(dir, bad, "src"))
         write(joinpath(dir, bad, "Project.toml"), "name = \"$bad\"\nuuid = \"$baduuid\"\n")
         write(joinpath(dir, bad, "src", "$bad.jl"), "module $bad\nerror(\"cannot load\")\nend\n")
+        # and one that a link names a function in
+        link, linkuuid = "DocBrowserLoadLink", Base.UUID("5d9c9a4e-3b0e-4f53-9c1e-6c1f2a7b8d17")
+        mkpath(joinpath(dir, link, "src"))
+        write(joinpath(dir, link, "Project.toml"), "name = \"$link\"\nuuid = \"$linkuuid\"\n")
+        write(joinpath(dir, link, "src", "$link.jl"), "module $link\nexport hello\n\"Says hello.\"\nhello() = 1\nend\n")
         env = joinpath(dir, "env")
         mkpath(env)
-        write(joinpath(env, "Project.toml"), "[deps]\n$name = \"$uuid\"\n$bad = \"$baduuid\"\n")
+        write(joinpath(env, "Project.toml"), "[deps]\n$name = \"$uuid\"\n$bad = \"$baduuid\"\n$link = \"$linkuuid\"\n")
         write(joinpath(env, "Manifest.toml"), """
             manifest_format = "2.0"
             [[deps.$name]]
@@ -324,6 +329,9 @@ end
             [[deps.$bad]]
             uuid = "$baduuid"
             path = "$(replace(joinpath(dir, bad), '\\' => '/'))"
+            [[deps.$link]]
+            uuid = "$linkuuid"
+            path = "$(replace(joinpath(dir, link), '\\' => '/'))"
             """)
         old = Base.active_project()
         Base.set_active_project(joinpath(env, "Project.toml"))
@@ -359,7 +367,7 @@ end
             # Once precompiled, it is loaded under a notice over the page, gone when it is done.
             @test occursin("│   Loading $name…   │", strip_ansi(String(take!(b.out.io)))) && isempty(b.modal)
             @test b.console === nothing && isempty(b.loading)
-            @test length(b.cat.unloaded) == 1
+            @test length(b.cat.unloaded) == 2
             @test DocBrowser.current_key(b) == ModuleTarget(Base.root_module(id))
             @test (@invokelatest getglobal(Main, Symbol(name))) === Base.root_module(id)
             # A package that fails to load leaves the panel up with the error, until the next key.
@@ -380,6 +388,14 @@ end
             @test Threads.threadid(t) == Threads.threadid()
             b.loads = nothing
             handle!(b, KeyEvent('j'))
+            # A `docs:` link to a name in a package that is not loaded, as shared from another
+            # session, loads the package and then opens the name.
+            t = DocBrowser.place_target("docs: $link.hello", b.cat)
+            @test t == DocBrowser.LoadTarget(Base.PkgId(linkuuid, link), "$link.hello")
+            DocBrowser.follow!(b, t)
+            wait(b.load_task)
+            key = DocBrowser.current_key(b)
+            @test key isa DocBrowser.NameEntry && key.name === :hello
             b.live = false
         finally
             popfirst!(DEPOT_PATH)
