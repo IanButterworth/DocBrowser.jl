@@ -695,14 +695,14 @@ function in_console(f, done, b::Browser, what::String)
         b.live && Base.invokelatest(draw, b)
     catch
     end
-    # Started here, on the browser's thread, so that they run while `f` keeps its thread busy.
+    # Started here, on the browser's thread, so that they run while `f` keeps its own busy.
     reader = @async for line in eachline(pipe)
         @lock b.lock (push!(b.console, console_text(line)); redraw())
     end
     clock = Timer(1; interval=1) do _
         @lock b.lock (b.loading = string(what, "… ", round(Int, time() - t0), " s"); redraw())
     end
-    b.load_task = Threads.@spawn begin
+    b.load_task = Threads.@spawn :default begin
         ok = false
         try
             redirect_stdio(stdout=pipe, stderr=pipe) do
@@ -2869,7 +2869,20 @@ function drain_mouse(io::IO)
 end
 
 # Drawn with `rich_faces` when the terminal allows, except where the user has set a face.
+# The browser runs on an interactive thread when Julia has one, so that a package it loads on
+# a default thread does not hold it up.
 function run!(b::Browser)
+    Threads.nthreads(:interactive) > 0 && Threads.threadpool() !== :interactive || return run_here!(b)
+    t = Threads.@spawn :interactive run_here!(b)
+    try
+        return fetch(t)
+    catch err
+        err isa TaskFailedException && throw(err.task.exception)
+        rethrow()
+    end
+end
+
+function run_here!(b::Browser)
     faces = rich_faces()
     custom = hasproperty(StyledStrings.FACES, :modifications) ? values(StyledStrings.FACES.modifications) : ()
     StyledStrings.withfaces(Iterators.filter(((k, _),) -> !any(m -> haskey(m, k), custom), faces)) do
