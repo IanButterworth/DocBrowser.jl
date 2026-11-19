@@ -31,7 +31,27 @@ struct PasteEvent
     text::String
 end
 
-const Event = Union{KeyEvent,MouseEvent,PasteEvent}
+"""
+    SchemeEvent(dark, background)
+
+The terminal said whether it is dark (`dark`, or `nothing` when it did not say) or what its
+background colour is (`background`, as it spelled it, or `""`), in answer to the browser's
+questions or when its scheme changes.
+"""
+struct SchemeEvent
+    dark::Union{Nothing,Bool}
+    background::String
+end
+
+"""
+    LegacyMouseEvent()
+
+A mouse report in the X10 encoding, which the browser does not ask for. It means the terminal
+lost the SGR encoding while still reporting, as VS Code's does when it reattaches a session.
+"""
+struct LegacyMouseEvent end
+
+const Event = Union{KeyEvent,MouseEvent,PasteEvent,SchemeEvent,LegacyMouseEvent}
 
 const SHIFT, ALT, CTRL = 1, 2, 4
 
@@ -99,18 +119,23 @@ function read_ss3(io::IO)
     return key === nothing ? nothing : KeyEvent(key)
 end
 
-# OSC and DCS strings (such as replies to colour queries) end with BEL or ESC \.
+# OSC and DCS strings (such as replies to colour queries) end with BEL or ESC \. The reply
+# with the background colour is kept.
 function skip_string(io::IO)
+    buf = IOBuffer()
     while true
         # Give up if the string stops, so that it cannot swallow what is typed next.
         wait_bytes(io, 0.1) || return nothing
         c = read(io, Char)
-        c == '\a' && return nothing
+        c == '\a' && break
         if c == '\e'
             wait_bytes(io, 0.03) || return nothing
-            read(io, Char) == '\\' && return nothing
+            read(io, Char) == '\\' && break
         end
+        position(buf) < 160 && write(buf, c)
     end
+    m = match(r"^11;([\x21-\x7e]{1,100})$", String(take!(buf)))
+    return m === nothing ? nothing : SchemeEvent(nothing, m[1])
 end
 
 function read_csi(io::IO)
@@ -121,14 +146,22 @@ function read_csi(io::IO)
         c = read(io, Char)
     end
     buf = IOBuffer()
-    while !('@' <= c <= '~')
+    # A mouse report ends at `M` or `m` and nowhere else: xterm.js sends `<0;NaN;NaNm`, and
+    # ended at the `N`, the rest would arrive as keys.
+    while !('@' <= c <= '~') || private == '<' && !(c in "Mm")
         write(buf, c)
+        position(buf) > 32 && return nothing # no sequence a terminal sends
         c = read(io, Char)
     end
     final = c
     body = String(take!(buf))
+    private == '\0' && final == 'M' && isempty(body) && return read_x10(io)
+    if private == '?' && final == 'n' && body in ("997;1", "997;2")
+        return SchemeEvent(body == "997;1", "")
+    end
     params = Int[something(tryparse(Int, p), 0) for p in split(body, ';'; keepempty=true)]
     if private == '<' && final in ('M', 'm')
+        occursin(r"^\d+;\d+;\d+$", body) || return nothing
         return mouse_event(params, final == 'M')
     end
     private == '\0' || return nothing
@@ -142,6 +175,17 @@ function read_csi(io::IO)
     key = get(CSI_KEYS, final, nothing)
     key === nothing && return nothing
     return KeyEvent(key, key === :backtab ? SHIFT : csi_mods(params))
+end
+
+# The three bytes after an X10 report's `CSI M`, each a value plus 32, so never an Escape: one
+# is the start of whatever came next.
+function read_x10(io::IO)
+    for _ in 1:3
+        wait_bytes(io, 0.03) || break
+        peek(io, UInt8) == 0x1b && break
+        read(io, UInt8)
+    end
+    return LegacyMouseEvent()
 end
 
 function mouse_event(params::Vector{Int}, pressed::Bool)

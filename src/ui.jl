@@ -116,6 +116,15 @@ mutable struct Browser
     # calls look up their methods again, which waits for the loading to let go of the method
     # tables, so the browser would stop responding while it loads.
     world::UInt
+    # The search being typed is a readline field: `qcol` characters of it are before the
+    # cursor, and `killed` is what ^W, ^K and the like took last, for ^Y to put back.
+    qcol::Int
+    killed::String
+    # Whether the terminal is light or dark, and its background, as far as is known, and the
+    # faces that go with them.
+    theme::Union{Nothing,Symbol}
+    bg::Union{Nothing,UInt32}
+    faces::Vector{Pair{Symbol,Face}}
 end
 
 function Browser(term::REPL.Terminals.TextTerminal, cat::Catalog=Catalog())
@@ -128,7 +137,8 @@ function Browser(term::REPL.Terminals.TextTerminal, cat::Catalog=Catalog())
                 (0.0, nothing), ReentrantLock(), Dict{Any,Set{Symbol}}(), false, LAYOUT[],
                 get(term.out_stream, :color, true)::Bool || REPL.Terminals.hascolor(term),
                 nothing, false, (0.0, 0.0, 0.0, 0.0), nothing, ManualHit[], SEARCH_INDIRECT[], 0, (0, 0), Inf, nothing,
-                tip_order(), 1, false, nothing, nothing, "", nothing, Base.get_world_counter())
+                tip_order(), 1, false, nothing, nothing, "", nothing, Base.get_world_counter(),
+                0, "", terminal_theme(), nothing, browser_faces(terminal_theme(), nothing))
     any(p -> p.role in (:project, :direct), cat.pkgs) || push!(b.expanded, :indirect)
     refresh_side!(b)
     b.side.cursor = 1 # the start page
@@ -1184,7 +1194,8 @@ function header_right(b::Browser, level::Int)
     else
         # The field being typed into stands out; once typing stops it is only shaded.
         face = b.typing ? :REPL_DocBrowser_searchbox : :REPL_DocBrowser_unfocused
-        text = string(" ", b.query, b.typing ? "▏" : " ")
+        q = b.query
+        text = b.typing ? string(" ", first(q, b.qcol), "▏", chop(q; head=b.qcol, tail=0)) : string(" ", q, " ")
         pad = level == 0 ? max(0, 22 - textwidth(text)) : 0
         level < 2 && push!(right, Seg(" "), Seg(" " * mode * " ⇄ ", face, (:toggle_text,)))
         push!(right, Seg(text * ' '^pad, face, (:search,)))
@@ -1612,13 +1623,18 @@ end
 
 ansi(s::AnnotatedString, color::Bool=true) = sprint(print, s; context = :color => color)
 
+# The rows that changed, in one write. Each one's line is deleted and put back blank before it
+# is written: xterm.js, VS Code's terminal, keeps a hyperlink's marker until its line is
+# deleted, so lines written over in place kept every link they ever showed, and leaving the
+# screen took longer the more there were. A delete only works inside the scroll region, which
+# is set to the whole screen first.
 function draw(b::Browser)
-    rows = frame(b)
+    rows = StyledStrings.withfaces(() -> frame(b), b.faces)
     buf = IOBuffer()
-    print(buf, "\e[?2026h")
+    print(buf, "\e[?2026h\e[r")
     for (i, r) in enumerate(rows)
         if i > length(b.prev) || b.prev[i] != r
-            print(buf, "\e[", i, ";1H\e[0m", r, "\e[0m")
+            print(buf, "\e[", i, ";1H\e[M\e[L\e[0m", r, "\e[0m")
         end
     end
     print(buf, "\e[?2026l")
@@ -1640,15 +1656,20 @@ function set_raw(b::Browser, raw::Bool)
     return
 end
 
+# Asks whether the terminal is dark or light, now and when that changes, and for its
+# background colour, for the rich faces.
+scheme_reports(on::Bool) = on ? "\e[?2031h\e[?996n\e]11;?\e\\" : "\e[?2031l"
+
 function enter_screen(b::Browser)
     set_raw(b, true)
     write(b.out, ENTER_SCREEN)
+    rich_colours() && write(b.out, scheme_reports(true))
     flush(b.out)
     b.prev = String[]
 end
 
 function leave_screen(b::Browser, drain::Bool=false)
-    write(b.out, LEAVE_SCREEN)
+    write(b.out, (rich_colours() ? scheme_reports(false) : "") * LEAVE_SCREEN)
     flush(b.out)
     # Mouse reports sent before reporting stopped would reach the prompt. They must be read
     # while still in raw mode, which delivers them without waiting for a newline.
@@ -2330,6 +2351,7 @@ valid_text(s::AbstractString) = isvalid(s) ? String(s) : filter(isvalid, String(
 
 function start_search!(b::Browser, query::String="")
     b.query = valid_text(query)
+    b.qcol = length(b.query)
     b.typing = true
     b.focus = :names
     b.source = :names
@@ -2371,20 +2393,9 @@ function update_search!(b::Browser)
     show_heading!(b)
 end
 
+# The browser's own keys come first, and the rest edit the query.
 function handle_typing!(b::Browser, ev::KeyEvent)
-    q = something(b.query, "")
-    if ev.key === :char && ev.mods & (CTRL | ALT) == 0
-        isvalid(ev.char) || return false
-        b.query = q * ev.char
-        update_search!(b)
-    elseif ev.key === :backspace
-        isempty(q) && return true
-        b.query = q[1:prevind(q, lastindex(q))]
-        update_search!(b)
-    elseif ev.key === :char && ev.mods == CTRL && ev.char == 'u'
-        b.query = ""
-        update_search!(b)
-    elseif ev.key === :char && ev.mods == CTRL && ev.char == 't'
+    if ev.key === :char && ev.mods == CTRL && ev.char == 't'
         toggle_textsearch!(b)
     elseif ev.key === :char && ev.mods == CTRL && ev.char == 'a'
         toggle_indirect!(b)
@@ -2407,10 +2418,13 @@ function handle_typing!(b::Browser, ev::KeyEvent)
             b.typing = false
             open_entry!(b, row.entry::NameEntry)
         end
-    elseif ev.key in (:tab, :right)
+    elseif ev.key === :tab || ev.key === :right && ev.mods == 0 && b.qcol >= length(b.query)
+        # past the end of the query, on to the results
         b.typing = false
     elseif ev.key === :escape || (ev.key === :char && ev.mods == CTRL && ev.char in ('c', 'g'))
         close_search!(b)
+    else
+        edit_query!(b, ev)
     end
     return true
 end
@@ -2550,8 +2564,115 @@ end
 function handle!(b::Browser, ev::PasteEvent)
     text = strip(replace(valid_text(ev.text), r"\s+" => ' '))
     isempty(text) && return false
-    start_search!(b, String(text))
+    # into the search being typed, where the cursor is, or else a new search
+    if b.typing
+        q = b.query
+        set_query!(b, string(first(q, b.qcol), text, chop(q; head=b.qcol, tail=0)), b.qcol + length(text))
+    else
+        start_search!(b, String(text))
+    end
     return true
+end
+
+# The terminal said whether it is dark or light, or what its background is. A background
+# alone says dark or light only until the terminal says so outright.
+function handle!(b::Browser, ev::SchemeEvent)
+    if ev.dark !== nothing
+        b.theme = ev.dark ? :dark : :light
+    else
+        bg = parse_colour(ev.background)
+        bg === nothing && return false
+        b.bg = bg
+        b.theme === nothing && (b.theme = is_dark(bg) ? :dark : :light)
+    end
+    b.faces = browser_faces(b.theme, b.bg)
+    b.prev = String[] # every row's colours may have changed
+    return true
+end
+
+# The terminal lost the mouse encoding asked for, so it is asked for again.
+function handle!(b::Browser, ::LegacyMouseEvent)
+    b.live && write(b.out, "\e[?1000h\e[?1002h\e[?1003h\e[?1006h")
+    return false
+end
+
+## Editing the search ##
+
+# The keys that edit the query, as readline has them. ^A is the browser's.
+function edit_query!(b::Browser, ev::KeyEvent)
+    q = collect(b.query)
+    n = clamp(b.qcol, 0, length(q))
+    alt, ctrl = ev.mods == ALT, ev.mods == CTRL
+    key(c) = ev.key === :char && ev.char == c
+    if ev.key === :char && ev.mods & (CTRL | ALT) == 0
+        isvalid(ev.char) || return false
+        insert!(q, n + 1, ev.char)
+        n += 1
+    elseif ev.key === :backspace && ev.mods == 0
+        n > 0 && (deleteat!(q, n); n -= 1)
+    elseif ev.key === :delete || ctrl && key('d')
+        n < length(q) && deleteat!(q, n + 1)
+    elseif ev.key === :backspace && alt || ctrl && key('w')
+        # Alt-Backspace takes a word of letters and digits, ^W one up to a space
+        m = word_back(q, n, alt ? isalnum : !isspace)
+        kill!(b, q, m+1:n)
+        n = m
+    elseif ctrl && key('u')
+        kill!(b, q, 1:n)
+        n = 0
+    elseif ctrl && key('k')
+        kill!(b, q, n+1:length(q))
+    elseif alt && key('d')
+        kill!(b, q, n+1:word_forward(q, n, isalnum))
+    elseif ctrl && key('y')
+        for c in b.killed
+            insert!(q, n += 1, c)
+        end
+    elseif ev.key === :left && ev.mods == 0 || ctrl && key('b')
+        n = max(0, n - 1)
+    elseif ev.key === :right && ev.mods == 0 || ctrl && key('f')
+        n = min(length(q), n + 1)
+    elseif ev.key === :left && alt || alt && key('b')
+        n = word_back(q, n, isalnum)
+    elseif ev.key === :right && alt || alt && key('f')
+        n = word_forward(q, n, isalnum)
+    elseif ev.key === :home
+        n = 0
+    elseif ev.key === :end || ctrl && key('e')
+        n = length(q)
+    else
+        return false
+    end
+    set_query!(b, String(q), n)
+    return true
+end
+
+isalnum(c::Char) = isletter(c) || isdigit(c)
+
+# Where the word before or after the first `n` characters of `q` starts or ends, over
+# anything that is not in a word first.
+function word_back(q, n, inword)
+    while n > 0 && !inword(q[n]); n -= 1; end
+    while n > 0 && inword(q[n]); n -= 1; end
+    return n
+end
+function word_forward(q, n, inword)
+    while n < length(q) && !inword(q[n+1]); n += 1; end
+    while n < length(q) && inword(q[n+1]); n += 1; end
+    return n
+end
+
+function kill!(b::Browser, q::Vector{Char}, r::UnitRange{Int})
+    isempty(r) && return
+    b.killed = String(q[r])
+    deleteat!(q, r)
+end
+
+function set_query!(b::Browser, q::String, col::Int)
+    b.qcol = col
+    q == b.query && return
+    b.query = q
+    update_search!(b)
 end
 
 function hit_at(b::Browser, row::Int, col::Int)
@@ -2732,6 +2853,8 @@ This browser shows Julia's manual, under *Julia*, and the loaded packages, under
 # Finding things
 
   * `/`: search the names of every loaded module. `Plots.pl` searches inside modules matching `Plots`.
+  * While typing a search, the readline keys edit it: `←` `→`, `Home` `End`, `^W`, `^K`, `^Y`,
+    `Alt-⌫`. `→` at its end goes on to the results.
   * `Ctrl-T`: switch between searching names and searching the text of docstrings.
   * `Ctrl-A`: include indirect dependencies in searches, or leave them out again.
   * `i`: show or hide internal (non-public) names.
@@ -2891,13 +3014,14 @@ function run!(b::Browser)
 end
 
 function run_here!(b::Browser)
-    faces = rich_faces()
+    !Base.generating_output() && !any(p -> p.role === :manual, b.cat.manual) && download_manual!(b)
+    run_screen!(b)
+end
+
+# The rich faces for `theme` and `bg`, except where the user has set a face.
+function browser_faces(theme, bg)
     custom = hasproperty(StyledStrings.FACES, :modifications) ? values(StyledStrings.FACES.modifications) : ()
-    StyledStrings.withfaces(Iterators.filter(((k, _),) -> !any(m -> haskey(m, k), custom), faces)) do
-        # Started here so that what the download draws when it ends has these faces too.
-        !Base.generating_output() && !any(p -> p.role === :manual, b.cat.manual) && download_manual!(b)
-        run_screen!(b)
-    end
+    return Pair{Symbol,Face}[kv for kv in rich_faces(theme, bg) if !any(m -> haskey(m, kv[1]), custom)]
 end
 
 function download_manual!(b::Browser)
@@ -2941,6 +3065,7 @@ function run_screen!(b::Browser)
     enter_screen(b)
     b.live = true
     timer = watch_resize(() -> tick(b))
+    pending = false
     try
         @lock b.lock draw(b)
         while !b.quit
@@ -2960,7 +3085,12 @@ function run_screen!(b::Browser)
                     true
                 end
                 b.quit && stay_open!(b)
-                changed && !b.quit && in_world(draw, b)
+                # During a burst, of wheel turns or a held key, the frame is drawn once, at its end.
+                pending |= changed
+                if pending && !b.quit && bytesavailable(b.in) == 0
+                    in_world(draw, b)
+                    pending = false
+                end
             end
             # A click that closes the browser is followed by its release, which would
             # otherwise be typed at the prompt.

@@ -1,5 +1,6 @@
 using Test
 using REPL
+import StyledStrings
 # Loading the browser should not load Downloads, unless something already has.
 const DOWNLOADS_PRELOADED = haskey(Base.loaded_modules,
     Base.PkgId(Base.UUID("f43a241f-c20a-4ad4-852c-f6b1247861c6"), "Downloads"))
@@ -98,9 +99,17 @@ strip_ansi(s) = replace(s, r"\e\[[0-9;?]*[a-zA-Z]|\e\]8;[^\e]*\e\\\\" => "")
     @test ev("\e[200~some text\e[201~") == PasteEvent("some text")
     # A paste whose end marker is lost ends when no more input comes.
     @test DocBrowser.read_paste(IOBuffer("some text"), 0.01) == PasteEvent("some text")
-    # Replies to terminal queries are skipped.
-    @test ev("\e]11;rgb:0000/0000/0000\e\\") === nothing
+    # Replies to terminal queries are skipped, but for whether it is dark and its background.
+    @test ev("\e]11;rgb:0000/0000/0000\e\\") == DocBrowser.SchemeEvent(nothing, "rgb:0000/0000/0000")
+    @test ev("\e]10;rgb:ffff/ffff/ffff\a") === nothing
+    @test ev("\e[?997;1n") == DocBrowser.SchemeEvent(true, "")
     @test ev("\e[?62;22c") === nothing
+    # A mouse report in the X10 encoding is read whole, and its bytes are not keys.
+    io = IOBuffer("\e[M #!q")
+    @test read_event(io) == DocBrowser.LegacyMouseEvent() && read_event(io) == KeyEvent('q')
+    # xterm.js's report for a place it cannot name ends at its `m`, not at the `N`.
+    io = IOBuffer("\e[<0;NaN;NaNmq")
+    @test read_event(io) === nothing && read_event(io) == KeyEvent('q')
     # Alt with a key that can start a sequence, and an unterminated string, swallow nothing.
     @test ev("\e]") == KeyEvent(']', DocBrowser.ALT)
     @test ev("\eO") == KeyEvent('O', DocBrowser.ALT)
@@ -282,6 +291,11 @@ end
     browse(t)
     out = String(take!(t.out_stream.io))
     @test occursin("\e[?1049h", out) && endswith(out, DocBrowser.LEAVE_SCREEN)
+    # A burst of keys already waiting is drawn once, at its end, and here it ends by quitting.
+    @test count("\e[?2026h", out) == 1
+    # Each row drawn is a line deleted and put back first, inside a scroll region that is the
+    # whole screen.
+    @test occursin("\e[?2026h\e[r\e[1;1H\e[M\e[L", out)
 end
 
 @testset "loading a project dependency" begin
@@ -1436,6 +1450,20 @@ end
     handle!(b, PasteEvent("  sort \n "))
     @test b.query == "sort" && b.typing
     @test !handle!(b, PasteEvent("   "))
+    # The query edits as a readline field: the cursor moves, words go with ^W and
+    # Alt-Backspace, and ^Y puts back what went. → moves the cursor, and only past the end
+    # goes on to the results.
+    ctrl(c) = KeyEvent(c, DocBrowser.CTRL)
+    press!(b, ctrl('u'), 'B', 'a', 's', 'e', '.', 's', 'r', 't')
+    press!(b, :left, :left, 'o'); @test b.query == "Base.sort"
+    @test occursin(" Base.so▏rt", String(DocBrowser.header_bar(b)))
+    press!(b, :right);    @test b.typing
+    handle!(b, PasteEvent("ed!")); @test b.query == "Base.sored!t"
+    press!(b, KeyEvent(:end), KeyEvent(:backspace, DocBrowser.ALT)); @test b.query == "Base.sored!"
+    press!(b, KeyEvent(:left, DocBrowser.ALT), ctrl('k')); @test b.query == "Base."
+    press!(b, ctrl('y'), ctrl('y')); @test b.query == "Base.sored!sored!"
+    press!(b, :home, KeyEvent(:delete), ctrl('e'), ctrl('w')); @test b.query == ""
+    press!(b, 's', 'u', 'm', :right); @test !b.typing && b.query == "sum"
 end
 
 @testset "clicking and hovering everything" begin
@@ -1673,6 +1701,28 @@ Base.flush(io::ResizableIO) = nothing
     @test (b.height, b.width) == (20, 70) && isempty(b.prev)
     DocBrowser.draw(b)
     @test length(b.prev) == 20
+end
+
+@testset "the terminal's colours" begin
+    @test DocBrowser.parse_colour("rgb:1e1e/1e1e/1e1e") == 0x1e1e1e
+    @test DocBrowser.parse_colour("rgb:f/8/0") == 0xff8800
+    @test DocBrowser.parse_colour("#ffffff") === nothing
+    @test DocBrowser.is_dark(0x1e1e1e) && !DocBrowser.is_dark(0xfafafa)
+    @test DocBrowser.mix_colour(0x000000, 0xffffff, 0.5) == 0x808080
+    # The background sets dark or light until the terminal says so outright, and redraws.
+    b = Browser(fake_terminal(""))
+    b.theme = nothing
+    frame(b); b.prev = ["x"]
+    @test handle!(b, DocBrowser.SchemeEvent(nothing, "rgb:fafa/fafa/fafa"))
+    @test b.theme === :light && b.bg == 0xfafafa && isempty(b.prev)
+    handle!(b, DocBrowser.SchemeEvent(nothing, "rgb:0000/0000/0000"))
+    @test b.theme === :light
+    handle!(b, DocBrowser.SchemeEvent(true, ""))
+    @test b.theme === :dark
+    @test !handle!(b, DocBrowser.SchemeEvent(nothing, "nonsense"))
+    # The shades are mixed from the background the terminal reported.
+    faces = Dict(DocBrowser.theme_faces(:dark, UInt32(0x101010)))
+    @test faces[:REPL_DocBrowser_bar] == StyledStrings.Face(background=StyledStrings.SimpleColor(0x1c1c1c))
 end
 
 @testset "search engine" begin
