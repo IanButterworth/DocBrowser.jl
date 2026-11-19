@@ -111,6 +111,9 @@ mutable struct Browser
     console::Union{Nothing,Vector{String}}
     loading::String
     load_task::Union{Nothing,Task}
+    # Where loads are sent to run on the thread that opened the browser, while the browser
+    # runs on another, or `nothing` when they run where they are started.
+    loads::Union{Nothing,Channel{Task}}
     # The world that keys and drawing run in. It moves on only when a package that the browser
     # loaded is done: in the latest world, each method that loading adds makes the browser's
     # calls look up their methods again, which waits for the loading to let go of the method
@@ -137,7 +140,7 @@ function Browser(term::REPL.Terminals.TextTerminal, cat::Catalog=Catalog())
                 (0.0, nothing), ReentrantLock(), Dict{Any,Set{Symbol}}(), false, LAYOUT[],
                 get(term.out_stream, :color, true)::Bool || REPL.Terminals.hascolor(term),
                 nothing, false, (0.0, 0.0, 0.0, 0.0), nothing, ManualHit[], SEARCH_INDIRECT[], 0, (0, 0), Inf, nothing,
-                tip_order(), 1, false, nothing, nothing, "", nothing, Base.get_world_counter(),
+                tip_order(), 1, false, nothing, nothing, "", nothing, nothing, Base.get_world_counter(),
                 0, "", terminal_theme(), nothing, browser_faces(terminal_theme(), nothing))
     any(p -> p.role in (:project, :direct), cat.pkgs) || push!(b.expanded, :indirect)
     refresh_side!(b)
@@ -720,7 +723,7 @@ function in_console(f, done, b::Browser, what::String)
     clock = Timer(1; interval=1) do _
         @lock b.lock (b.loading = string(what, "… ", round(Int, time() - t0), " s"); redraw())
     end
-    b.load_task = Threads.@spawn :default begin
+    t = @task begin
         ok = false
         try
             redirect_stdio(stdout=pipe, stderr=pipe) do
@@ -747,6 +750,8 @@ function in_console(f, done, b::Browser, what::String)
             end
         end
     end
+    b.load_task = t
+    b.loads === nothing ? schedule(t) : put!(b.loads, t)
     return
 end
 
@@ -3000,16 +3005,28 @@ function drain_mouse(io::IO)
 end
 
 # Drawn with `rich_faces` when the terminal allows, except where the user has set a face.
-# The browser runs on an interactive thread when Julia has one, so that a package it loads on
-# a default thread does not hold it up.
+# With more than one thread, the browser runs on another, so that it keeps responding while a
+# package loads. Packages load on the thread that opened the browser, which in the REPL is the
+# main thread: some, such as GLFW, can only be loaded there.
 function run!(b::Browser)
-    Threads.nthreads(:interactive) > 0 && Threads.threadpool() !== :interactive || return run_here!(b)
-    t = Threads.@spawn :interactive run_here!(b)
+    Threads.nthreads() > 1 || return run_here!(b)
+    b.loads = Channel{Task}(Inf)
+    t = Threads.@spawn :default try
+        run_here!(b)
+    finally
+        close(b.loads)
+    end
+    # scheduled from here, so that they run on this thread
+    for load in b.loads
+        schedule(load)
+    end
     try
         return fetch(t)
     catch err
         err isa TaskFailedException && throw(err.task.exception)
         rethrow()
+    finally
+        b.loads = nothing
     end
 end
 

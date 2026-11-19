@@ -368,6 +368,16 @@ end
             @test occursin("any key close", strip_ansi(frame(b)[end]))
             handle!(b, KeyEvent('j'))
             @test b.console === nothing
+            # With the browser on another thread, a load is handed to the thread that opened
+            # it, which some packages must be loaded on.
+            b.loads = Channel{Task}(1)
+            DocBrowser.load_package!(b, Base.PkgId(baduuid, bad))
+            t = take!(b.loads)
+            @test b.load_task === t && !istaskstarted(t)
+            schedule(t); wait(t)
+            @test Threads.threadid(t) == Threads.threadid()
+            b.loads = nothing
+            handle!(b, KeyEvent('j'))
             b.live = false
         finally
             popfirst!(DEPOT_PATH)
