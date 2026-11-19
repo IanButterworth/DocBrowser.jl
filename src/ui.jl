@@ -137,6 +137,7 @@ mutable struct Browser
     theme::Union{Nothing,Symbol}
     bg::Union{Nothing,UInt32}
     faces::Vector{Pair{Symbol,Face}}
+    held::Union{Nothing,TermInput.HeldTerminal} # the terminal's modes, while the browser has it
 end
 
 function Browser(term::REPL.Terminals.TextTerminal, cat::Catalog=Catalog())
@@ -150,7 +151,7 @@ function Browser(term::REPL.Terminals.TextTerminal, cat::Catalog=Catalog())
                 get(term.out_stream, :color, true)::Bool || REPL.Terminals.hascolor(term),
                 nothing, false, (0.0, 0.0, 0.0, 0.0), nothing, ManualHit[], 0, NameEntry[], Tuple{String,PkgId}[], SEARCH_INDIRECT[], 0, (0, 0), Inf, nothing,
                 tip_order(), 1, false, nothing, nothing, "", nothing, nothing, "", Base.get_world_counter(),
-                0, "", terminal_theme(), nothing, browser_faces(terminal_theme(), nothing))
+                0, "", terminal_theme(), nothing, browser_faces(terminal_theme(), nothing), nothing)
     any(p -> p.role in (:project, :direct), cat.pkgs) || push!(b.expanded, :indirect)
     refresh_side!(b)
     b.side.cursor = 1 # the start page
@@ -711,16 +712,25 @@ end
 
 # Run `f` on the normal screen. Returns whether it succeeded.
 function suspend(f, b::Browser)
-    leave_screen(b)
     try
-        f()
+        if b.held === nothing
+            f()
+        else
+            # The scheme's reports would land in the editor's input, and it may change meanwhile.
+            rich_colours() && write(b.out, scheme_reports(false))
+            try
+                TermInput.suspend(f, b.held)
+            finally
+                rich_colours() && write(b.out, scheme_reports(true))
+            end
+        end
         return true
     catch err
         err isa InterruptException && rethrow()
         b.status = "Error: " * first_line(err)
         return false
     finally
-        enter_screen(b)
+        b.prev = String[]
     end
 end
 
@@ -1722,22 +1732,12 @@ end
 
 ansi(s::AnnotatedString, color::Bool=true) = sprint(print, s; context = :color => color)
 
-# The rows that changed, in one write. Each one's line is deleted and put back blank before it
-# is written: xterm.js, VS Code's terminal, keeps a hyperlink's marker until its line is
-# deleted, so lines written over in place kept every link they ever showed, and leaving the
-# screen took longer the more there were. A delete only works inside the scroll region, which
-# is set to the whole screen first.
+# The whole screen, in one write, when anything on it has changed. Each line is deleted and
+# written again: xterm.js keeps a hyperlink's marker until its line is deleted.
 function draw(b::Browser)
     rows = StyledStrings.withfaces(() -> frame(b), b.faces)
-    buf = IOBuffer()
-    print(buf, "\e[?2026h\e[r")
-    for (i, r) in enumerate(rows)
-        if i > length(b.prev) || b.prev[i] != r
-            print(buf, "\e[", i, ";1H\e[M\e[L\e[0m", r, "\e[0m")
-        end
-    end
-    print(buf, "\e[?2026l")
-    write(b.out, take!(buf))
+    rows == b.prev && return nothing
+    write(b.out, TermInput.frame_bytes([string("\e[0m", r, "\e[0m") for r in rows]))
     flush(b.out)
     b.prev = rows
     nothing
@@ -1745,35 +1745,31 @@ end
 
 ## Terminal setup ##
 
-const ENTER_SCREEN = "\e[?1049h\e[?25l\e[?7l\e[?1000h\e[?1002h\e[?1003h\e[?1006h\e[?2004h\e[H\e[2J"
-const LEAVE_SCREEN = "\e[?2004l\e[?1006l\e[?1003l\e[?1002l\e[?1000l\e[?7h\e[?25h\e[?1049l"
-
-# Only a console has a raw mode, and only while it is open.
-function set_raw(b::Browser, raw::Bool)
-    b.term isa REPL.Terminals.TTYTerminal && !(b.in isa Base.TTY && isopen(b.in)) && return
-    REPL.Terminals.raw!(b.term, raw)
-    return
-end
-
 # Asks whether the terminal is dark or light, now and when that changes, and for its
 # background colour, for the rich faces.
 scheme_reports(on::Bool) = on ? "\e[?2031h\e[?996n\e]11;?\e\\" : "\e[?2031l"
 
 function enter_screen(b::Browser)
-    set_raw(b, true)
-    write(b.out, ENTER_SCREEN)
+    # Pointer moves too, for the cards and the links under the pointer.
+    b.held = TermInput.enter_terminal(b.in, b.out; altscreen=true, mouse=true, motion=true, paste=true)
     rich_colours() && write(b.out, scheme_reports(true))
-    flush(b.out)
     b.prev = String[]
 end
 
 function leave_screen(b::Browser, drain::Bool=false)
-    write(b.out, (rich_colours() ? scheme_reports(false) : "") * LEAVE_SCREEN)
-    flush(b.out)
+    t = b.held
+    t === nothing && return
+    b.held = nothing
     # Mouse reports sent before reporting stopped would reach the prompt. They must be read
     # while still in raw mode, which delivers them without waiting for a newline.
-    drain && drain_mouse(b.in)
-    set_raw(b, false)
+    try
+        rich_colours() && write(b.out, scheme_reports(false))
+        write(b.out, TermInput.mouse_reporting(false; motion=true))
+        t.mouse = false
+        drain && drain_mouse(b.in)
+    catch
+    end
+    TermInput.leave_terminal(t)
 end
 
 function check_size!(b::Browser)
@@ -2619,7 +2615,7 @@ function handle!(b::Browser, ev::KeyEvent)
         else
             b.quit = true
         end
-    elseif isplain(ev, '?') || ev.key === :f1
+    elseif isplain(ev, '?')
         b.help = true
     elseif isplain(ev, '/') || isctrl(ev, 'f')
         start_search!(b, something(b.query, ""))
@@ -2745,7 +2741,7 @@ end
 
 # The terminal lost the mouse encoding asked for, so it is asked for again.
 function handle!(b::Browser, ::LegacyMouseEvent)
-    b.live && write(b.out, "\e[?1000h\e[?1002h\e[?1003h\e[?1006h")
+    b.live && write(b.out, TermInput.mouse_reporting(true; motion=true))
     return false
 end
 

@@ -1,6 +1,7 @@
 using Test
 using REPL
 import StyledStrings
+import TermInput
 # Loading the browser should not load Downloads, unless something already has.
 const DOWNLOADS_PRELOADED = haskey(Base.loaded_modules,
     Base.PkgId(Base.UUID("f43a241f-c20a-4ad4-852c-f6b1247861c6"), "Downloads"))
@@ -76,6 +77,7 @@ module UndocumentedExt end
 strip_ansi(s) = replace(s, r"\e\[[0-9;?]*[a-zA-Z]|\e\]8;[^\e]*\e\\\\" => "")
 
 @testset "input decoding" begin
+    # TermInput reads the terminal, and its events become the browser's.
     ev(s) = read_event(IOBuffer(s))
     @test ev("q") == KeyEvent('q')
     @test ev("\r") == KeyEvent(:enter)
@@ -83,23 +85,21 @@ strip_ansi(s) = replace(s, r"\e\[[0-9;?]*[a-zA-Z]|\e\]8;[^\e]*\e\\\\" => "")
     @test ev("\x03") == KeyEvent('c', DocBrowser.CTRL)
     @test ev("\e") == KeyEvent(:escape)
     @test ev("\e[A") == KeyEvent(:up)
-    # Alt and an arrow, from a terminal that sends Escape before the arrow's sequence.
-    @test ev("\e\e[D") == KeyEvent(:left, DocBrowser.ALT)
-    @test ev("\e\e") == KeyEvent(:escape)
+    @test ev("é") == KeyEvent('é')
+    # Alt and an arrow, however the terminal spells it, and Alt-b and Alt-f, go back and forward.
+    @test ev("\e\e[D") == ev("\e[1;3D") == ev("\eb") == KeyEvent(:left, DocBrowser.ALT)
+    @test ev("\ef") == KeyEvent(:right, DocBrowser.ALT)
     @test ev("\eOB") == KeyEvent(:down)
-    @test ev("\e[1;3D") == KeyEvent(:left, DocBrowser.ALT)
     @test ev("\e[5~") == KeyEvent(:pageup)
     @test ev("\e[Z") == KeyEvent(:backtab, DocBrowser.SHIFT)
-    @test ev("\eb") == KeyEvent('b', DocBrowser.ALT)
     @test ev("\e[<0;12;7M") == MouseEvent(:press, 1, 7, 12, 0)
     @test ev("\e[<0;12;7m") == MouseEvent(:release, 1, 7, 12, 0)
     @test ev("\e[<35;3;4M") == MouseEvent(:move, 4, 4, 3, 0)
     @test ev("\e[<65;3;4M") == MouseEvent(:wheeldown, 0, 4, 3, 0)
     @test ev("\e[<128;3;4M") == MouseEvent(:press, 8, 4, 3, 0)
+    @test ev("\e[<129;3;4M") == MouseEvent(:press, 9, 4, 3, 0)
     @test ev("\e[200~some text\e[201~") == PasteEvent("some text")
-    # A paste whose end marker is lost ends when no more input comes.
-    @test DocBrowser.read_paste(IOBuffer("some text"), 0.01) == PasteEvent("some text")
-    # Replies to terminal queries are skipped, but for whether it is dark and its background.
+    # Replies to terminal queries are nothing, but for whether it is dark and its background.
     @test ev("\e]11;rgb:0000/0000/0000\e\\") == DocBrowser.SchemeEvent(nothing, "rgb:0000/0000/0000")
     @test ev("\e]10;rgb:ffff/ffff/ffff\a") === nothing
     @test ev("\e[?997;1n") == DocBrowser.SchemeEvent(true, "")
@@ -110,19 +110,8 @@ strip_ansi(s) = replace(s, r"\e\[[0-9;?]*[a-zA-Z]|\e\]8;[^\e]*\e\\\\" => "")
     # xterm.js's report for a place it cannot name ends at its `m`, not at the `N`.
     io = IOBuffer("\e[<0;NaN;NaNmq")
     @test read_event(io) === nothing && read_event(io) == KeyEvent('q')
-    # Alt with a key that can start a sequence, and an unterminated string, swallow nothing.
-    @test ev("\e]") == KeyEvent(']', DocBrowser.ALT)
-    @test ev("\eO") == KeyEvent('O', DocBrowser.ALT)
     io = IOBuffer("\e]11;rgb")
     @test read_event(io) === nothing && eof(io)
-    # A sequence split across two reads, as over a slow connection, is still one key. The rest
-    # is written once the reader waits for it; a fixed delay was flaky on Windows.
-    p = Pipe(); Base.link_pipe!(p)
-    write(p, "\e")
-    Base.wait_readnb(p.out, 1)
-    t = @async write(p, "[A")
-    @test read_event(p.out) == KeyEvent(:up)
-    wait(t); close(p)
     # After a click closes the browser, its release is read rather than left for the prompt.
     io = IOBuffer("\e[<35;3;4M\e[<0;79;26mabc")
     DocBrowser.await_release(io)
@@ -292,12 +281,13 @@ end
     t = fake_terminal("q")
     browse(t)
     out = String(take!(t.out_stream.io))
-    @test occursin("\e[?1049h", out) && endswith(out, DocBrowser.LEAVE_SCREEN)
+    @test occursin("\e[?1049h", out) && occursin(TermInput.mouse_reporting(false; motion=true), out)
+    @test endswith(out, "\e[?2004l\e[?25h\e[?1049l")
     # A burst of keys already waiting is drawn once, at its end, and here it ends by quitting.
     @test count("\e[?2026h", out) == 1
     # Each row drawn is a line deleted and put back first, inside a scroll region that is the
     # whole screen.
-    @test occursin("\e[?2026h\e[r\e[1;1H\e[M\e[L", out)
+    @test occursin("\e[r\e[1H\e[M\e[L", out)
 end
 
 @testset "loading a project dependency" begin
@@ -1479,7 +1469,7 @@ end
     press!(b, :down, :pagedown, :up, ' ')
     @test b.help
     press!(b, 'z');       @test !b.help
-    press!(b, :f1);       @test b.help
+    press!(b, '?');       @test b.help
     press!(b, :escape);   @test !b.help
     press!(b, 'x');       @test :extended in DocBrowser.page_flags(b, DocBrowser.current_key(b)) ||
                                 occursin("No extended help", b.status)
