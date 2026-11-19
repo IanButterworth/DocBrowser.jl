@@ -15,11 +15,13 @@ pkg> add DocBrowser
 Then load it in `~/.julia/config/startup.jl`, so that help mode opens the browser in every session:
 
 ```julia
-using DocBrowser
+isinteractive() && @eval using DocBrowser
 ```
 
-Loading it takes about 30 ms, almost all of it the precompiled code that makes the browser open
-at once. It reads the docs only when the browser opens. Julia 1.12 and later are supported.
+Loading it takes about 30 ms at the REPL, almost all of it the precompiled code that makes the
+browser open at once. `startup.jl` runs for scripts too, where loading it would also load the
+REPL, so the line above skips those. It reads the docs only when the browser opens. Julia 1.12
+and later are supported.
 
 ## Using it
 
