@@ -1001,7 +1001,10 @@ end
     profile = b.manual_hits[1].path
     press!(b, :enter)
     @test b.query === nothing && DocBrowser.current_key(b) == DocBrowser.ManualTarget(profile, "")
-    # Pkg's manual is found by Pkg's name, and its pages say where they are from.
+    # Pkg's manual is found by Pkg's name, and its pages say where they are from. What follows
+    # is how it is shown while Pkg is not loaded, so Pkg is left out if something loaded it.
+    filter!(p -> p.id.name != "Pkg", b.cat.pkgs)
+    DocBrowser.refresh_side!(b)
     press!(b, '/', "Pkg"...)
     @test DocBrowser.page_name(b.cat.manual[DocBrowser.manual_page_of(b.cat, b.manual_hits[1].path)]) == "Pkg"
     h = findfirst(r -> r.kind === :hit, b.name_rows)

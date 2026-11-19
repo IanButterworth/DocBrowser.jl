@@ -105,6 +105,7 @@ mutable struct Browser
     tips::Vector{Int}            # the tips in the order they are shown, shuffled for each browser
     tip::Int                     # which of them the start page shows
     live::Bool                   # whether it is on the screen, taking input
+    card_timer::Union{Nothing,Timer} # shows the card once the pointer has rested
 end
 
 function Browser(term::REPL.Terminals.TextTerminal, cat::Catalog=Catalog())
@@ -117,7 +118,7 @@ function Browser(term::REPL.Terminals.TextTerminal, cat::Catalog=Catalog())
                 (0.0, nothing), ReentrantLock(), Dict{Any,Set{Symbol}}(), false, LAYOUT[],
                 get(term.out_stream, :color, true)::Bool || REPL.Terminals.hascolor(term),
                 nothing, false, (0.0, 0.0, 0.0, 0.0), nothing, ManualHit[], SEARCH_INDIRECT[], 0, (0, 0), Inf, nothing,
-                tip_order(), 1, false)
+                tip_order(), 1, false, nothing)
     any(p -> p.role in (:project, :direct), cat.pkgs) || push!(b.expanded, :indirect)
     refresh_side!(b)
     b.side.cursor = 1 # the start page
@@ -1699,8 +1700,14 @@ end
 # still there then.
 function rest_pointer!(b::Browser)
     b.hover_since = time()
-    b.live && Timer(_ -> tick(b), CARD_DELAY + 0.01)
+    stop_card_timer!(b)
+    b.live && (b.card_timer = Timer(_ -> tick(b), CARD_DELAY + 0.01))
     return
+end
+
+function stop_card_timer!(b::Browser)
+    b.card_timer === nothing || close(b.card_timer)
+    b.card_timer = nothing
 end
 
 function hide_card!(b::Browser)
@@ -2830,7 +2837,7 @@ function run_screen!(b::Browser)
         end
     finally
         # Stop anything else drawing, also when leaving on an error.
-        @lock b.lock (b.quit = true; b.live = false)
+        @lock b.lock (b.quit = true; b.live = false; stop_card_timer!(b))
         close(timer)
         # Pointer moves are reported until the terminal sees the end of mouse reporting,
         # so some may still be on their way, however the browser was closed.
