@@ -1457,10 +1457,15 @@ end
     press!(b, '/', :backspace); @test b.typing && b.query == ""
     press!(b, 's', 'u', 'm')
     @test !isempty(b.results)
+    # The documentation shows the result picked, and nothing when there is none to pick.
+    @test DocBrowser.current_key(b) isa DocBrowser.NameEntry
     press!(b, KeyEvent('u', DocBrowser.CTRL)); @test b.query == ""
     @test DocBrowser.hint_key("^A") == KeyEvent('a', DocBrowser.CTRL)
     press!(b, 'z', 'q', 'x', 'j', 'v')
     press!(b, :enter);    @test b.status == "No matches"
+    @test DocBrowser.current_key(b) === :none
+    @test all(isempty ∘ strip ∘ String, DocBrowser.draw_doc(b, 1, 60))
+    @test strip(String(DocBrowser.pane_title(b, :doc, 1, 60))) == ""
     press!(b, KeyEvent('u', DocBrowser.CTRL), 's', 'u', 'm')
     # How many names match depends on what earlier tests loaded.
     start = b.names.cursor

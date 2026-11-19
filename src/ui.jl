@@ -611,6 +611,8 @@ function current_key(b::Browser)
     row = name_row(b)
     row !== nothing && row.kind in (:hit, :pkgpage) && return ManualTarget(row.hit.path, "")
     row !== nothing && row.kind === :entry && return row.entry
+    # a search's group heading, or a search with no results, shows nothing
+    b.query === nothing || return :none
     return ModuleTarget(b.mod)
 end
 
