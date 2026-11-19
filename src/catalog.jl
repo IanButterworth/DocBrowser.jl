@@ -124,11 +124,7 @@ end
 
 function read_project(path)
     path isa String && isfile(path) || return nothing
-    d = try
-        Base.parsed_toml(path)
-    catch
-        return nothing
-    end
+    d = @attempt Base.parsed_toml(path) return nothing
     return d isa AbstractDict ? d : nothing
 end
 
@@ -148,11 +144,7 @@ The active project's name as the `pkg>` prompt shows it, such as `@v1.12` or `My
 function project_label()
     proj = Base.active_project()
     proj === nothing && return nothing
-    name = try
-        REPL.projname(REPL.find_root_base_project(proj))
-    catch
-        nothing
-    end
+    name = @attempt REPL.projname(REPL.find_root_base_project(proj))
     name === nothing && return nothing
     return textwidth(name) > 30 ? first(name, 27) * "..." : name
 end
@@ -306,11 +298,7 @@ function classify(cat::Catalog, m::Module, s::Symbol)
     isdefined(m, s) || return nothing
     vis = Base.isexported(m, s) ? :exported : Base.ispublic(m, s) ? :public : :internal
     vis === :internal && s in (:eval, :include) && return nothing
-    owner = try
-        which(m, s)
-    catch
-        m
-    end
+    owner = @attempt which(m, s) m
     # Internal names that were only imported belong to another module's listing.
     vis === :internal && owner !== m && return nothing
     val = getglobal(m, s)
@@ -343,11 +331,7 @@ function module_entries(cat::Catalog, m::Module)
         syms = unique!(Symbol[names(m; all=true, imported=true); names(m)])
         out = NameEntry[]
         for s in syms
-            e = try
-                classify(cat, m, s)
-            catch
-                nothing
-            end
+            e = @attempt classify(cat, m, s)
             e === nothing || push!(out, e)
         end
         sort_by!(out, e -> (findfirst(==(e.kind), KINDS), sortkey(e.name)))
@@ -528,11 +512,7 @@ function search_text(cat::Catalog, query::AbstractString; internal::Bool=false, 
     hits = Tuple{Int,NameEntry}[]
     for (b, text) in doc_texts(cat)
         all(w -> occursin(w, text), words) || continue
-        e = try
-            classify(cat, b.mod, b.var)
-        catch
-            nothing
-        end
+        e = @attempt classify(cat, b.mod, b.var)
         e === nothing && continue
         !internal && (e.vis === :internal || e.deprecated) && continue
         # The whole phrase beats scattered words, and a word in the name beats a mention.

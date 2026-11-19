@@ -519,11 +519,7 @@ function add_type_info!(pb::PageBuilder, @nospecialize(T), flags::Set{Symbol})
     end
     add_supertypes!(pb, T)
     if D isa DataType && isabstracttype(D)
-        subs = try
-            InteractiveUtils.subtypes(T)
-        catch
-            Any[]
-        end
+        subs = @attempt InteractiveUtils.subtypes(T) Any[]
         if !isempty(subs)
             heading!(pb, "Subtypes ($(length(subs)))")
             segs = Any[]
@@ -536,12 +532,8 @@ function add_type_info!(pb::PageBuilder, @nospecialize(T), flags::Set{Symbol})
     end
     add_methods!(pb, "Constructors", methods(T))
     if :methodswith in flags
-        ms = try
-            # hidden from inference, so it is compiled only when someone asks for it
-            Base.inferencebarrier(InteractiveUtils.methodswith)(T; supertypes=false)
-        catch
-            Method[]
-        end
+        # hidden from inference, so it is compiled only when someone asks for it
+        ms = @attempt Base.inferencebarrier(InteractiveUtils.methodswith)(T; supertypes=false) Method[]
         add_methods!(pb, "Methods that take this type", ms)
         isempty(ms) && (heading!(pb, "Methods that take this type"); addline!(pb, "    ", ("none found", :REPL_DocBrowser_dim)))
     else
@@ -759,11 +751,7 @@ function docs_url(dir)
     (dir === nothing || !isdir(dir)) && return nothing
     readme = findfirst(f -> occursin(r"^readme(\.md)?$"i, f), readdir(dir))
     readme === nothing && return nothing
-    text = try
-        read(joinpath(dir, readdir(dir)[readme]), String)
-    catch
-        return nothing
-    end
+    text = @attempt read(joinpath(dir, readdir(dir)[readme]), String) return nothing
     found = nothing
     for (i, re) in enumerate(BADGE_PATTERNS), m in eachmatch(re, text)
         label, url = i == 1 ? (m[1] * " " * m[2], m[3]) : i == 2 ? (m[1], m[2]) : (m[2], m[1])
@@ -920,11 +908,7 @@ function module_page(cat::Catalog, m::Module, width::Int)
         else
             addline!(pb, "  ", ("No module docstring; showing $(basename(readme)).", :REPL_DocBrowser_dim))
             addline!(pb)
-            md = try
-                strip_badges!(Markdown.parse(read(readme, String)))
-            catch
-                Markdown.parse("Could not read `$readme`.")
-            end
+            md = @attempt strip_badges!(Markdown.parse(read(readme, String))) Markdown.parse("Could not read `$readme`.")
         end
     end
     add_markdown!(pb, md, m, cat; contents=true)
@@ -988,11 +972,7 @@ function jll_markdown(m::Module, p::PkgEntry)
     println(io, "`$name` is a binary wrapper. It provides prebuilt binaries of ",
             chopsuffix(name, "_jll"), version, ", made with ",
             "[BinaryBuilder](https://github.com/JuliaPackaging/BinaryBuilder.jl), for Julia code to use.\n")
-    available = !isdefined(m, :is_available) || try
-        Base.invokelatest(getglobal(m, :is_available))::Bool
-    catch
-        true
-    end
+    available = !isdefined(m, :is_available) || @attempt(Base.invokelatest(getglobal(m, :is_available))::Bool, true)
     available || println(io, "!!! warning\n    These binaries are not available on this platform.\n")
     libs, exes = String[], String[]
     for n in names(m)

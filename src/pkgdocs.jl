@@ -78,11 +78,7 @@ end
 # The pages that a build script gives `makedocs` as `pages`, as files with the title and group
 # they are listed under, or `nothing` if it gives none as a literal list.
 function doc_page_list(src::String)
-    exprs = try
-        Meta.parseall(src)
-    catch
-        return nothing
-    end
+    exprs = @attempt Meta.parseall(src) return nothing
     # The list may be written out elsewhere in the script, and named.
     named = Dict{Symbol,Any}()
     found = Ref{Any}(nothing)
@@ -182,11 +178,7 @@ const AUTODOCS_ORDER = (:module, :constant, :type, :function, :macro)
 function autodocs_names(code::AbstractString, ctx::Module, cat::Catalog)
     opts = Dict{Symbol,Any}()
     for line in split(code, '\n')
-        ex = try
-            Meta.parse(line; raise=false)
-        catch
-            nothing
-        end
+        ex = @attempt Meta.parse(line; raise=false)
         Meta.isexpr(ex, :(=), 2) && ex.args[1] isa Symbol && (opts[ex.args[1]] = ex.args[2])
     end
     mods = Module[]

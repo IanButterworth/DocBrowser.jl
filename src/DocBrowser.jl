@@ -104,6 +104,30 @@ function terminal_theme()
     return nothing
 end
 
+# The value of `ex`, or of `default` if it fails. An interrupt is passed on, since it is the
+# user stopping the work, not the work failing.
+macro attempt(ex, default=nothing)
+    quote
+        try
+            $(esc(ex))
+        catch err
+            err isa InterruptException && rethrow()
+            $(esc(default))
+        end
+    end
+end
+
+# Whether `f`, which waits for something, returned within `timeout` seconds. If it did not,
+# its task is left to end by itself when what it waits for happens.
+function within(f, timeout::Real)
+    done = Channel{Bool}(2)
+    timer = Timer(_ -> put!(done, false), timeout)
+    errormonitor(Threads.@spawn (f(); put!(done, true)))
+    ok = take!(done)
+    close(timer)
+    return ok
+end
+
 include("catalog.jl")
 include("pages.jl")
 include("manual.jl")
