@@ -66,20 +66,26 @@ such as a terminal's reply to a query.
 """
 function read_event(io::IO)
     c = read(io, Char)
-    if c == '\e'
-        wait_bytes(io, 0.03) || return KeyEvent(:escape)
-        c2 = read(io, Char)
-        # A terminal sends a whole sequence at once. With nothing after it, this is Alt and a key.
-        if c2 in "[O]P" && wait_bytes(io, 0.03)
-            c2 == '[' && return read_csi(io)
-            c2 == 'O' && return read_ss3(io)
-            return skip_string(io)
-        end
-        c2 == '\e' && return KeyEvent(:escape)
-        ev = decode_char(c2)
-        return ev isa KeyEvent ? KeyEvent(ev.key, ev.char, ev.mods | ALT) : ev
+    return c == '\e' ? read_escape(io) : decode_char(c)
+end
+
+# What follows an Escape.
+function read_escape(io::IO)
+    wait_bytes(io, 0.03) || return KeyEvent(:escape)
+    c2 = read(io, Char)
+    # A terminal sends a whole sequence at once. With nothing after it, this is Alt and a key.
+    if c2 in "[O]P" && wait_bytes(io, 0.03)
+        c2 == '[' && return read_csi(io)
+        c2 == 'O' && return read_ss3(io)
+        return skip_string(io)
     end
-    return decode_char(c)
+    if c2 == '\e'
+        # Some terminals send Alt and an arrow as Escape before the arrow's own sequence.
+        ev = read_escape(io)
+        return ev isa KeyEvent && ev.key !== :escape ? KeyEvent(ev.key, ev.char, ev.mods | ALT) : ev
+    end
+    ev = decode_char(c2)
+    return ev isa KeyEvent ? KeyEvent(ev.key, ev.char, ev.mods | ALT) : ev
 end
 
 function decode_char(c::Char)

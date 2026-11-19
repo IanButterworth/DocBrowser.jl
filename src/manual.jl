@@ -358,7 +358,8 @@ function documenter_blocks(blocks::Vector, ctx::Module=Main, cat::Union{Nothing,
     out = Any[]
     for x in blocks
         if x isa Markdown.Code && startswith(x.language, "@")
-            lang = first(split(x.language))
+            # Options can follow the name, as in `@docs; canonical=false`.
+            lang = first(split(x.language, (' ', ';')))
             if lang in ("@example", "@repl")
                 push!(out, Markdown.Code("julia", x.code))
             elseif lang == "@autodocs" && cat !== nothing

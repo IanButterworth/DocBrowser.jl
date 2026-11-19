@@ -82,6 +82,9 @@ strip_ansi(s) = replace(s, r"\e\[[0-9;?]*[a-zA-Z]|\e\]8;[^\e]*\e\\\\" => "")
     @test ev("\x03") == KeyEvent('c', DocBrowser.CTRL)
     @test ev("\e") == KeyEvent(:escape)
     @test ev("\e[A") == KeyEvent(:up)
+    # Alt and an arrow, from a terminal that sends Escape before the arrow's sequence.
+    @test ev("\e\e[D") == KeyEvent(:left, DocBrowser.ALT)
+    @test ev("\e\e") == KeyEvent(:escape)
     @test ev("\eOB") == KeyEvent(:down)
     @test ev("\e[1;3D") == KeyEvent(:left, DocBrowser.ALT)
     @test ev("\e[5~") == KeyEvent(:pageup)
@@ -152,6 +155,12 @@ end
 end
 
 @testset "pages" begin
+    # Lines keep their annotations, as `split` gives them.
+    str = Base.AnnotatedString("ab\n\nc∀\nd", [(1:6, :face, :bold), (5:7, :face, :italic), (10:10, :face, :red)])
+    lines = DocBrowser.split_lines(str)
+    @test String.(lines) == ["ab", "", "c∀", "d"]
+    faces(l) = join((string(l[a.region], '=', a.value) for a in Base.annotations(l)), ' ')
+    @test faces.(lines) == ["ab=bold", "", "c∀=bold c∀=italic", "d=red"]
     cat = Catalog()
     e = only(filter(e -> e.name === :documented, module_entries(cat, Fixture)))
     p = entry_page(cat, e, 70)
@@ -666,7 +675,7 @@ end
             [another page](more.md) and [`sum`](@ref). This is ```inline``` code. Pkg's
             [environments](https://pkgdocs.julialang.org/v1/environments/) are installed too.
 
-            ```@docs
+            ```@docs; canonical=false
             sum
             ```
 
@@ -794,9 +803,14 @@ end
         # Trying again clears the error, and once it is done the manual is listed.
         DocBrowser.follow!(b, retry.target)
         @test DocBrowser.manual_status() in (:downloading, :none)
+        # A browser opened while it downloads gets the manual too.
+        b2 = Browser(fake_terminal(""))
+        b2.cat.manual = filter(p -> p.role !== :manual, manual)
+        DocBrowser.download_manual!(b2)
         wait(DocBrowser.MANUAL_DOWNLOAD[])
         @test DocBrowser.manual_status() === :none
         @test any(p -> p.role === :manual, b.cat.manual)
+        @test any(p -> p.role === :manual, b2.cat.manual)
         @test !any(l -> occursin(r"Manual (failed|loading)", l), strip_ansi.(frame(b)))
     finally
         DocBrowser.MANUAL_ERROR[] = DocBrowser.MANUAL_DOWNLOAD[] = nothing
@@ -982,8 +996,9 @@ end
     @test DocBrowser.current_key(b) == DocBrowser.ManualTarget(b.manual_hits[1].path, "")
     frame(b)
     @test occursin("manual", String(DocBrowser.pane_title(b, :doc, 1, 60)))
+    profile = b.manual_hits[1].path
     press!(b, :enter)
-    @test b.query === nothing && DocBrowser.side_page(b).title == "Profile"
+    @test b.query === nothing && DocBrowser.current_key(b) == DocBrowser.ManualTarget(profile, "")
     # Pkg's manual is found by Pkg's name, and its pages say where they are from.
     press!(b, '/', "Pkg"...)
     @test DocBrowser.page_name(b.cat.manual[DocBrowser.manual_page_of(b.cat, b.manual_hits[1].path)]) == "Pkg"
@@ -1349,6 +1364,7 @@ end
     press!(b, 's', 'u', 'm')
     @test !isempty(b.results)
     press!(b, KeyEvent('u', DocBrowser.CTRL)); @test b.query == ""
+    @test DocBrowser.hint_key("^A") == KeyEvent('a', DocBrowser.CTRL)
     press!(b, 'z', 'q', 'x', 'j', 'v')
     press!(b, :enter);    @test b.status == "No matches"
     press!(b, KeyEvent('u', DocBrowser.CTRL), 's', 'u', 'm')
@@ -1445,6 +1461,11 @@ end
     @test occursin("no editor", b.status)
     DocBrowser.URL_OPENER[] = url -> push!(OPENED, url)
     DocBrowser.EDITOR[] = (file, line) -> push!(EDITED, (file, line))
+    # Only web links are handed to the system, which would run or open a local file.
+    empty!(OPENED)
+    DocBrowser.follow!(b, DocBrowser.URLTarget("file:///tmp/x.sh"))
+    DocBrowser.follow!(b, DocBrowser.URLTarget("../x.md"))
+    @test isempty(OPENED) && occursin("Not a web link", b.status)
     # `e` on a selected row opens that name's source.
     DocBrowser.show_module!(b, Fixture)
     frame(b)

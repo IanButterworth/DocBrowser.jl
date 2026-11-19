@@ -604,6 +604,8 @@ const URL_OPENER = Ref{Any}(web_browser)
 const EDITOR = Ref{Any}(InteractiveUtils.edit)
 
 function open_url(b::Browser, url::String)
+    # A link in a docstring could name a local file, which the system would run or open.
+    occursin(r"^(https?|mailto):"i, url) || return (b.status = "Not a web link: " * url; nothing)
     if URL_OPENER[] === web_browser && haskey(ENV, "SSH_CONNECTION")
         # A web browser would open on the remote machine, so hand the link over instead.
         how = COPY[](b, url)
@@ -919,7 +921,7 @@ end
 const HINT_KEYS = Dict("↑↓" => nothing, "←→" => nothing, "⏎" => KeyEvent(:enter),
                        "⇥" => KeyEvent(:tab), "⌫" => KeyEvent(:backspace),
                        "esc" => KeyEvent(:escape), "{ }" => KeyEvent('}'),
-                       "^T" => KeyEvent('t', CTRL))
+                       "^T" => KeyEvent('t', CTRL), "^A" => KeyEvent('a', CTRL))
 hint_key(k::String) = haskey(HINT_KEYS, k) ? HINT_KEYS[k] : KeyEvent(first(k))
 
 const TIP = "Tip: click anything · drag to copy · right-click opens its source · ? lists every key"
@@ -2753,10 +2755,11 @@ end
 
 # Drawn with `rich_faces` when the terminal allows, except where the user has set a face.
 function run!(b::Browser)
-    !Base.generating_output() && !any(p -> p.role === :manual, b.cat.manual) && download_manual!(b)
     faces = rich_faces()
     custom = hasproperty(StyledStrings.FACES, :modifications) ? values(StyledStrings.FACES.modifications) : ()
     StyledStrings.withfaces(Iterators.filter(((k, _),) -> !any(m -> haskey(m, k), custom), faces)) do
+        # Started here so that what the download draws when it ends has these faces too.
+        !Base.generating_output() && !any(p -> p.role === :manual, b.cat.manual) && download_manual!(b)
         run_screen!(b)
     end
 end

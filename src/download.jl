@@ -122,12 +122,18 @@ end
 # failed, if it did.
 const MANUAL_DOWNLOAD = Ref{Union{Nothing,Task}}(nothing)
 const MANUAL_ERROR = Ref{Union{Nothing,String}}(nothing)
+# What to call when the running download ends: one for each browser that asked for it.
+const MANUAL_WAITERS = Any[]
+const WAIT_AT_EXIT = Ref(false)
 
-# Start downloading the manual in the background, unless it is there or being downloaded, and
-# call `on_done` when it is done or has failed. A download that fails can be tried again.
+# Start downloading the manual in the background, unless it is being downloaded, and call
+# `on_done` when it is done or has failed. A download that fails can be tried again.
 function start_manual_download(on_done)
-    MANUAL_DOWNLOAD[] === nothing || return nothing
+    push!(MANUAL_WAITERS, on_done)
+    t = MANUAL_DOWNLOAD[]
+    t === nothing || istaskdone(t) || return nothing
     MANUAL_ERROR[] = nothing
+    WAIT_AT_EXIT[] || (WAIT_AT_EXIT[] = true; atexit(wait_for_download))
     MANUAL_DOWNLOAD[] = @async begin
         try
             download_manual()
@@ -136,7 +142,9 @@ function start_manual_download(on_done)
             MANUAL_ERROR[] = first(split(sprint(showerror, err), '\n'))
             MANUAL_DOWNLOAD[] = nothing
         end
-        Base.invokelatest(on_done)
+        while !isempty(MANUAL_WAITERS)
+            Base.invokelatest(popfirst!(MANUAL_WAITERS))
+        end
     end
     return nothing
 end

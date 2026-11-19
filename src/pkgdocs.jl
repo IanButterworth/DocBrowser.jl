@@ -203,7 +203,7 @@ function autodocs_names(code::AbstractString, ctx::Module, cat::Catalog)
     public, private = get(opts, :Public, true) !== false, get(opts, :Private, true) !== false
     names = String[]
     for m in mods
-        meta = Base.Docs.meta(m)
+        meta = something(Base.Docs.meta(m; autoinit=false), IdDict{Any,Any}())
         picked = NameEntry[]
         for e in module_entries(cat, m)
             e.documented && e.mod === m && (e.kind === :global ? :constant : e.kind) in order || continue
