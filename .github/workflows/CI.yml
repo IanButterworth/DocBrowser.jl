@@ -36,3 +36,19 @@ jobs:
       - uses: julia-actions/cache@v3
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
+
+  # REPL.TerminalMenus with the terminal functions of JuliaLang/julia#65081, from its binaries
+  julia-pr:
+    name: Julia PR 65081 - ubuntu-latest
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Julia from the pull request
+        run: |
+          curl -fsSL https://install.julialang.org | sh -s -- --yes
+          echo "$HOME/.juliaup/bin" >> "$GITHUB_PATH"
+      - run: juliaup add pr65081
+      - name: Check that the browser uses REPL.TerminalMenus
+        run: julia +pr65081 --project -e 'using Pkg; Pkg.instantiate(); using DocBrowser, REPL; DocBrowser.TM === REPL.TerminalMenus || error("the copy was used")'
+      - run: julia +pr65081 --project -e 'using Pkg; Pkg.test()'
