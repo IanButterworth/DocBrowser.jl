@@ -130,6 +130,8 @@ end
     @test entries[:documented].documented
     @test entries[:documented_public].vis === :public
     @test !entries[:undocumented_public].documented
+    # Another name for something documented is documented too.
+    @test all(s -> DocBrowser.classify(cat, Base, s).documented, (:Cvoid, :÷, :ComplexF64))
     @test entries[:helper].vis === :internal
     @test entries[:Point].kind === :type
     @test entries[Symbol("@mac")].kind === :macro
