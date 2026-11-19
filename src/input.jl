@@ -165,14 +165,15 @@ function mouse_event(params::Vector{Int}, pressed::Bool)
     return MouseEvent(pressed ? :press : :release, button + 1, row, col, mods)
 end
 
-function read_paste(io::IO)
-    buf = IOBuffer()
-    marker = "\e[201~"
-    while true
-        write(buf, read(io, UInt8))
-        n = position(buf)
-        if n >= sizeof(marker) && String(buf.data[n-sizeof(marker)+1:n]) == marker
-            return PasteEvent(String(buf.data[1:n-sizeof(marker)]))
-        end
+# If the marker that ends a paste is lost, the paste ends when the terminal stops sending.
+# Waiting for the marker would take every later key as part of the paste.
+function read_paste(io::IO, timeout::Float64=1.0)
+    marker = codeunits("\e[201~")
+    bytes = UInt8[]
+    while wait_bytes(io, timeout)
+        push!(bytes, read(io, UInt8))
+        n = length(bytes) - length(marker)
+        n >= 0 && view(bytes, n+1:length(bytes)) == marker && return PasteEvent(String(resize!(bytes, n)))
     end
+    return PasteEvent(String(bytes))
 end
