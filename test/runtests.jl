@@ -290,14 +290,22 @@ end
         mkpath(joinpath(pkg, "src"))
         write(joinpath(pkg, "Project.toml"), "name = \"$name\"\nuuid = \"$uuid\"\n")
         write(joinpath(pkg, "src", "$name.jl"), "\"A package to load from the browser.\"\nmodule $name\nend\n")
+        # and one that fails to load
+        bad, baduuid = "DocBrowserLoadFails", Base.UUID("5d9c9a4e-3b0e-4f53-9c1e-6c1f2a7b8d12")
+        mkpath(joinpath(dir, bad, "src"))
+        write(joinpath(dir, bad, "Project.toml"), "name = \"$bad\"\nuuid = \"$baduuid\"\n")
+        write(joinpath(dir, bad, "src", "$bad.jl"), "module $bad\nerror(\"cannot load\")\nend\n")
         env = joinpath(dir, "env")
         mkpath(env)
-        write(joinpath(env, "Project.toml"), "[deps]\n$name = \"$uuid\"\n")
+        write(joinpath(env, "Project.toml"), "[deps]\n$name = \"$uuid\"\n$bad = \"$baduuid\"\n")
         write(joinpath(env, "Manifest.toml"), """
             manifest_format = "2.0"
             [[deps.$name]]
             uuid = "$uuid"
             path = "$(replace(pkg, '\\' => '/'))"
+            [[deps.$bad]]
+            uuid = "$baduuid"
+            path = "$(replace(joinpath(dir, bad), '\\' => '/'))"
             """)
         old = Base.active_project()
         Base.set_active_project(joinpath(env, "Project.toml"))
@@ -315,14 +323,34 @@ end
             @test occursin("not loaded", String(DocBrowser.pane_title(b, :names, 1, 40)))
             listed = String.(DocBrowser.draw_list(b, :names, 1, 40))
             @test occursin("load it", listed[1]) && all(isempty ∘ strip, listed[2:end])
+            b.live = true
             handle!(b, KeyEvent(:enter))
+            # It loads in a task, in a panel that says it is precompiling, and the browser can
+            # be used meanwhile, but not closed.
+            @test DocBrowser.loading(b)
+            screen = join(strip_ansi.(frame(b)), '\n')
+            @test occursin("julia> import $name", screen) && occursin("Precompiling $name…", screen)
+            handle!(b, KeyEvent('i')); handle!(b, KeyEvent('i'))
+            DocBrowser.load_package!(b, id)
+            @test startswith(b.status, "Already precompiling $name")
+            handle!(b, KeyEvent('q'))
+            DocBrowser.stay_open!(b)
+            @test !b.quit && occursin("can close once it is done", b.status)
+            wait(b.load_task)
             @test Base.root_module_exists(id)
-            # The import is shown as if typed at a coloured prompt, followed by a blank line.
-            shown = String(take!(b.out.io))
-            @test occursin(Regex("\\e\\[[0-9;]*mjulia> (\\e\\[[0-9;]*m)+import $name\\n\\n"), shown)
-            @test isempty(b.cat.unloaded)
+            @test b.console === nothing && isempty(b.loading)
+            @test length(b.cat.unloaded) == 1
             @test DocBrowser.current_key(b) == ModuleTarget(Base.root_module(id))
             @test (@invokelatest getglobal(Main, Symbol(name))) === Base.root_module(id)
+            # A package that fails to load leaves the panel up with the error, until the next key.
+            DocBrowser.load_package!(b, Base.PkgId(baduuid, bad))
+            wait(b.load_task)
+            @test any(l -> occursin("cannot load", l), b.console) && startswith(b.status, "Error")
+            @test any(l -> occursin("Loading failed", l), strip_ansi.(frame(b)))
+            @test occursin("any key close", strip_ansi(frame(b)[end]))
+            handle!(b, KeyEvent('j'))
+            @test b.console === nothing
+            b.live = false
         finally
             popfirst!(DEPOT_PATH)
             Base.set_active_project(old)
