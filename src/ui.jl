@@ -154,7 +154,7 @@ end
 # The loaded standard library that a page of the standard library's manual is for.
 function stdlib_package(b::Browser, page::ManualPage)
     page.role in (:stdlibdocs, :pkgdocs) || return nothing
-    name = page.role === :pkgdocs ? "Pkg" : basename(dirname(dirname(dirname(page.path))))
+    name = page.role === :pkgdocs ? "Pkg" : stdlib_name(page.path)
     i = findfirst(p -> p.id.name == name && p.role !== :extension && Base.is_stdlib(p.id), b.cat.pkgs)
     return i === nothing ? nothing : b.cat.pkgs[i]
 end
@@ -604,6 +604,8 @@ const URL_OPENER = Ref{Any}(web_browser)
 const EDITOR = Ref{Any}(InteractiveUtils.edit)
 
 function open_url(b::Browser, url::String)
+    # A link in a docstring could name a local file, which the system would run or open.
+    occursin(r"^(https?|mailto):"i, url) || return (b.status = "Not a web link: " * url; nothing)
     if URL_OPENER[] === web_browser && haskey(ENV, "SSH_CONNECTION")
         # A web browser would open on the remote machine, so hand the link over instead.
         how = COPY[](b, url)
@@ -632,7 +634,7 @@ function suspend(f, b::Browser)
         f()
         return true
     catch err
-        b.status = "Error: " * first(split(sprint(showerror, err), '\n'))
+        b.status = "Error: " * first_line(err)
         return false
     finally
         enter_screen(b)
@@ -919,7 +921,7 @@ end
 const HINT_KEYS = Dict("↑↓" => nothing, "←→" => nothing, "⏎" => KeyEvent(:enter),
                        "⇥" => KeyEvent(:tab), "⌫" => KeyEvent(:backspace),
                        "esc" => KeyEvent(:escape), "{ }" => KeyEvent('}'),
-                       "^T" => KeyEvent('t', CTRL))
+                       "^T" => KeyEvent('t', CTRL), "^A" => KeyEvent('a', CTRL))
 hint_key(k::String) = haskey(HINT_KEYS, k) ? HINT_KEYS[k] : KeyEvent(first(k))
 
 const TIP = "Tip: click anything · drag to copy · right-click opens its source · ? lists every key"
@@ -2753,10 +2755,11 @@ end
 
 # Drawn with `rich_faces` when the terminal allows, except where the user has set a face.
 function run!(b::Browser)
-    !Base.generating_output() && !any(p -> p.role === :manual, b.cat.manual) && download_manual!(b)
     faces = rich_faces()
     custom = hasproperty(StyledStrings.FACES, :modifications) ? values(StyledStrings.FACES.modifications) : ()
     StyledStrings.withfaces(Iterators.filter(((k, _),) -> !any(m -> haskey(m, k), custom), faces)) do
+        # Started here so that what the download draws when it ends has these faces too.
+        !Base.generating_output() && !any(p -> p.role === :manual, b.cat.manual) && download_manual!(b)
         run_screen!(b)
     end
 end
@@ -2803,7 +2806,7 @@ function run_screen!(b::Browser)
                     Base.invokelatest(handle!, b, ev)
                 catch err
                     err isa InterruptException && rethrow()
-                    b.status = "Error: " * first(split(sprint(showerror, err), '\n'))
+                    b.status = "Error: " * first_line(err)
                     true
                 end
                 changed && !b.quit && Base.invokelatest(draw, b)

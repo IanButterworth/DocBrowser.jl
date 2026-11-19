@@ -22,6 +22,10 @@ end
 
 in_stdlib_dir(dir) = dir !== nothing && startswith(normpath(dir), normpath(Sys.STDLIB))
 is_bundled(m::Module) = in_stdlib_dir(pkgdir(m))
+# The standard library that a file under the standard libraries' directory belongs to.
+stdlib_name(path::AbstractString) = String(first(splitpath(relpath(path, normpath(Sys.STDLIB)))))
+
+first_line(err) = String(first(split(sprint(showerror, err), '\n')))
 
 """
     NameEntry

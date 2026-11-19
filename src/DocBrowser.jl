@@ -119,7 +119,6 @@ include("precompile.jl")
 
 function __init__()
     foreach(addface!, FACES)
-    atexit(wait_for_download)
     # A REPL that opens the browser by itself needs no hook.
     isdefined(REPL, :open_docbrowser) || install_when_ready()
 end

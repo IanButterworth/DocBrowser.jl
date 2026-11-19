@@ -136,7 +136,8 @@ function page_package(cat::Catalog, path::String)
         p.role === :extension && continue
         dir = pkgdir(p.mod)
         dir === nothing && continue
-        startswith(path, joinpath(dir, "docs", "src") * Base.Filesystem.path_separator) && return p
+        # anywhere under `docs`, since a build can name another directory than `src`
+        startswith(path, joinpath(dir, "docs") * Base.Filesystem.path_separator) && return p
     end
     return nothing
 end
@@ -203,7 +204,7 @@ function autodocs_names(code::AbstractString, ctx::Module, cat::Catalog)
     public, private = get(opts, :Public, true) !== false, get(opts, :Private, true) !== false
     names = String[]
     for m in mods
-        meta = Base.Docs.meta(m)
+        meta = something(Base.Docs.meta(m; autoinit=false), IdDict{Any,Any}())
         picked = NameEntry[]
         for e in module_entries(cat, m)
             e.documented && e.mod === m && (e.kind === :global ? :constant : e.kind) in order || continue

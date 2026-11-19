@@ -17,6 +17,16 @@ is_docs_place(line::AbstractString) = occursin(r"^\s*(docs:|https?://(pkg)?docs\
 
 buffer_text(s) = String(take!(copy(LineEdit.buffer(s))))
 
+# Run the browser. A failure is reported, so that it does not break the prompt.
+function browse_from_repl(term, query)
+    try
+        return Base.invokelatest(browse, term; query, context=Base.active_module())
+    catch err
+        err isa InterruptException || @error "The documentation browser failed" exception=(err, catch_backtrace())
+        return nothing
+    end
+end
+
 # Run the browser in place of the current prompt, then return to `julia_prompt` with the name
 # the user picked, if any, typed in.
 function open_from_prompt(s::LineEdit.MIState, julia_prompt::LineEdit.Prompt)
@@ -26,12 +36,7 @@ function open_from_prompt(s::LineEdit.MIState, julia_prompt::LineEdit.Prompt)
     termbuf = LineEdit.TerminalBuffer(IOBuffer())
     s.mode_state[mode] = LineEdit.deactivate(mode, LineEdit.state(s), termbuf, term)
     LineEdit.commit_changes(term, termbuf)
-    name = nothing
-    try
-        name = Base.invokelatest(browse, term; query, context=Base.active_module())
-    catch err
-        err isa InterruptException || @error "The documentation browser failed" exception=(err, catch_backtrace())
-    end
+    name = browse_from_repl(term, query)
     mode isa LineEdit.Prompt && LineEdit.reset_state(LineEdit.state(s, mode))
     enter_input_mode(term)
     s.current_mode = julia_prompt
@@ -91,13 +96,7 @@ function install(repl = Base.active_repl)
     help.on_done = function (s, buf, ok)
         line = String(take!(copy(buf)))
         ok && is_docs_place(line) || return done(s, buf, ok)
-        term = LineEdit.terminal(s)
-        name = nothing
-        try
-            name = Base.invokelatest(browse, term; query=line, context=Base.active_module())
-        catch err
-            err isa InterruptException || @error "The documentation browser failed" exception=(err, catch_backtrace())
-        end
+        name = browse_from_repl(LineEdit.terminal(s), line)
         LineEdit.transition(s, julia_prompt)
         name === nothing || (LineEdit.edit_insert(LineEdit.buffer(s), name); LineEdit.refresh_line(s))
         return nothing

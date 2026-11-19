@@ -158,8 +158,32 @@ function render_markdown(md, width::Int)
     else
         show(buf, MIME"text/plain"(), md)
     end
-    str = read(seekstart(buf), AnnotatedString)
-    return AnnotatedString{String}[AnnotatedString(l) for l in split(str, '\n')]
+    return split_lines(read(seekstart(buf), AnnotatedString))
+end
+
+# The lines of `str`, each with its part of the annotations. Splitting the annotated text
+# itself looks through every annotation for every character, which is slow on a long page.
+function split_lines(str::AnnotatedString{String})
+    s = String(str)
+    starts, stops = Int[1], Int[]
+    i = 1
+    while (j = findnext('\n', s, i)) !== nothing
+        push!(stops, prevind(s, j))
+        push!(starts, j + 1)
+        i = j + 1
+    end
+    push!(stops, lastindex(s))
+    anns = annotations(str)
+    per_line = [similar(anns, 0) for _ in starts]
+    for a in anns
+        k = searchsortedlast(starts, first(a.region))
+        while 1 <= k <= length(starts) && starts[k] <= last(a.region)
+            lo, hi = max(first(a.region), starts[k]), min(last(a.region), stops[k])
+            lo <= hi && push!(per_line[k], (; region = lo-starts[k]+1:hi-starts[k]+1, label = a.label, value = a.value))
+            k += 1
+        end
+    end
+    return AnnotatedString{String}[AnnotatedString(s[starts[k]:stops[k]], per_line[k]) for k in eachindex(starts)]
 end
 
 function walk_md(f, @nospecialize(x))
