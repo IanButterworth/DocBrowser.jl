@@ -53,17 +53,24 @@ const FACES = (
     :REPL_DocBrowser_logo_purple   => Face(foreground=:magenta),
 )
 
-# With 256 or more colours, and once the REPL has learnt whether the terminal is light or
-# dark, the Julia logo's colours replace the named ones, and the header and footer are
-# shaded. Without both, the named colours are kept, since exact colours chosen for one
-# kind of background are unreadable on the other.
-function rich_faces()
-    Base.get_have_truecolor() || get(Base.current_terminfo(), :colors, 0) >= 256 || return ()
-    theme = terminal_theme()
-    theme === nothing && return ()
+# With 256 or more colours, and once it is known whether the terminal is light or dark, the
+# Julia logo's colours replace the named ones, and the header and footer are shaded. Without
+# both, the named colours are kept, since exact colours chosen for one kind of background are
+# unreadable on the other. `bg` is the background colour the terminal reported, if it did.
+rich_faces(theme=terminal_theme(), bg=nothing) =
+    rich_colours() && theme !== nothing ? theme_faces(theme, bg) : ()
+
+function theme_faces(theme::Symbol, bg)
     rgb(c) = StyledStrings.SimpleColor(c)
-    shade(α) = StyledStrings.blend(:background, :foreground, α)
     dark = theme === :dark
+    shade = if isdefined(StyledStrings, :blend) && terminal_theme() !== nothing
+        α -> StyledStrings.blend(:background, :foreground, α)
+    else
+        # StyledStrings does not know the terminal's colours before Julia 1.14, so the shades
+        # are mixed here, from the background towards white or black.
+        from, to = something(bg, dark ? 0x1e1e1e : 0xffffff), dark ? 0xffffff : 0x000000
+        α -> rgb(mix_colour(from, to, α))
+    end
     blue, green, purple, red = dark ? (0x6b8cf0, 0x58b947, 0xb07cd0, 0xe0605a) :
                                       (0x3355c4, 0x2f8a22, 0x8a4ca8, 0xbf3a31)
     accent, onaccent = dark ? (0x2b3f86, 0xffffff) : (0x4063d8, 0xffffff)
@@ -91,6 +98,21 @@ function rich_faces()
         :REPL_DocBrowser_logo_purple   => Face(foreground=rgb(0x9558b2)),
     )
 end
+
+rich_colours() = Base.get_have_truecolor() || get(Base.current_terminfo(), :colors, 0) >= 256
+
+mix_colour(a::UInt32, b::UInt32, α) =
+    reduce(|, (round(UInt32, (1 - α) * (a >> s & 0xff) + α * (b >> s & 0xff)) << s for s in (16, 8, 0)))
+
+# A colour as a terminal reports it, `rgb:RRRR/GGGG/BBBB` with one to four hex digits for each.
+function parse_colour(s::AbstractString)
+    m = match(r"^rgb:([0-9a-fA-F]{1,4})/([0-9a-fA-F]{1,4})/([0-9a-fA-F]{1,4})$", s)
+    m === nothing && return nothing
+    c(h) = round(UInt32, parse(Int, h; base=16) / (16^length(h) - 1) * 255)
+    return c(m[1]) << 16 | c(m[2]) << 8 | c(m[3])
+end
+
+is_dark(c::UInt32) = 0.2126 * (c >> 16 & 0xff) + 0.7152 * (c >> 8 & 0xff) + 0.0722 * (c & 0xff) < 128
 
 # `:light` or `:dark` once the REPL has asked the terminal for its colours and
 # StyledStrings has applied the matching theme, which is all that changes `region`.
