@@ -212,6 +212,9 @@ end
     DocBrowser.follow!(b, NameTarget(Fixture, :documented))
     @test b.mod === Fixture
     @test DocBrowser.current_key(b).name === :documented
+    # A public name without a docstring is not dimmed, which would make it look internal.
+    i = findfirst(r -> r.entry !== nothing && r.entry.name === :undocumented_public, b.name_rows)
+    @test !any(a -> a.value === :REPL_DocBrowser_dim, Base.annotations(DocBrowser.list_line(b, :names, i, 1, 40, 2)))
     @test b.focus === :doc
     frame(b)
     # Step through the links and follow the first one.
