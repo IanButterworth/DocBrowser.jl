@@ -1292,7 +1292,8 @@ function list_line(b::Browser, pane::Symbol, i::Int, x::Int, w::Int, row::Int)
             put_seg!(rb, kind_glyph(e.kind), kind_face(e.kind))
             put_seg!(rb, " ")
             name = is_module_entry(e) ? display_name(e.mod) : String(e.name)
-            face = e.vis === :internal || !e.documented ? :REPL_DocBrowser_dim : nothing
+            # A name without a docstring is not dimmed: that would make it look internal.
+            face = e.vis === :internal ? :REPL_DocBrowser_dim : nothing
             e.deprecated && (face = [:REPL_DocBrowser_dim, :strikethrough])
             put_match!(rb, name, face, action)
             if b.query !== nothing && !is_module_entry(e)
@@ -2640,7 +2641,7 @@ Drag across the documentation to select text, which is copied when you let go. D
   * `○` public: part of the API, but needs qualifying, as in `Module.name`.
   * `·` internal: not public, and may change without notice.
 
-Dimmed names have no docstring of their own, and struck-out names are deprecated. Mentions of packages, such as `Example.jl`, lead to the package's documentation, to its load page, or to a web search.
+Dimmed names are internal, and struck-out names are deprecated. Mentions of packages, such as `Example.jl`, lead to the package's documentation, to its load page, or to a web search.
 
 # More help
 

@@ -316,7 +316,15 @@ function classify(cat::Catalog, m::Module, s::Symbol)
     else
         :global
     end
-    return NameEntry(m, s, kind, vis, Binding(m, s) in cat.documented, owner, deprecated)
+    return NameEntry(m, s, kind, vis, is_documented(cat, Binding(m, s)), owner, deprecated)
+end
+
+# Whether a name has documentation: its own, or that of what it is another name for, which
+# is what its page shows.
+function is_documented(cat::Catalog, b::Binding)
+    b in cat.documented && return true
+    alias = @attempt Base.Docs.aliasof(b) b
+    return alias != b && alias in cat.documented
 end
 
 sortkey(s::Symbol) = (str = String(s); (!Base.isidentifier(lstrip(str, '@')), lowercase(str), str))

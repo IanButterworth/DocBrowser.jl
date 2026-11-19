@@ -130,6 +130,8 @@ end
     @test entries[:documented].documented
     @test entries[:documented_public].vis === :public
     @test !entries[:undocumented_public].documented
+    # Another name for something documented is documented too.
+    @test all(s -> DocBrowser.classify(cat, Base, s).documented, (:Cvoid, :÷, :ComplexF64))
     @test entries[:helper].vis === :internal
     @test entries[:Point].kind === :type
     @test entries[Symbol("@mac")].kind === :macro
@@ -210,6 +212,9 @@ end
     DocBrowser.follow!(b, NameTarget(Fixture, :documented))
     @test b.mod === Fixture
     @test DocBrowser.current_key(b).name === :documented
+    # A public name without a docstring is not dimmed, which would make it look internal.
+    i = findfirst(r -> r.entry !== nothing && r.entry.name === :undocumented_public, b.name_rows)
+    @test !any(a -> a.value === :REPL_DocBrowser_dim, Base.annotations(DocBrowser.list_line(b, :names, i, 1, 40, 2)))
     @test b.focus === :doc
     frame(b)
     # Step through the links and follow the first one.
