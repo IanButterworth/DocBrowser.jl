@@ -356,9 +356,13 @@ end
 
 entry_value(e::NameEntry) = getglobal(e.mod, e.name)
 
-# An entry for a whole module, so that search finds packages and submodules too.
-module_entry(cat::Catalog, m::Module) =
-    NameEntry(m, nameof(m), :module, :exported, module_binding(m) in cat.documented, m)
+# An entry for a whole module, so that search finds packages and submodules too. A package
+# counts as exported, and a submodule is marked as its parent has it.
+function module_entry(cat::Catalog, m::Module)
+    p, s = parentmodule(m), nameof(m)
+    vis = p === m || Base.isexported(p, s) ? :exported : Base.ispublic(p, s) ? :public : :internal
+    return NameEntry(m, s, :module, vis, module_binding(m) in cat.documented, m)
+end
 
 is_module_entry(e::NameEntry) = e.kind === :module && e.name === nameof(e.mod) && entry_value(e) === e.mod
 

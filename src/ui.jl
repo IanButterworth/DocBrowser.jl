@@ -106,6 +106,16 @@ mutable struct Browser
     tip::Int                     # which of them the start page shows
     live::Bool                   # whether it is on the screen, taking input
     card_timer::Union{Nothing,Timer} # shows the card once the pointer has rested
+    # What loading a package printed, shown in a panel above the footer, and what it is doing
+    # while it loads, or "". The panel stays after a failure, until the next key.
+    console::Union{Nothing,Vector{String}}
+    loading::String
+    load_task::Union{Nothing,Task}
+    # The world that keys and drawing run in. It moves on only when a package that the browser
+    # loaded is done: in the latest world, each method that loading adds makes the browser's
+    # calls look up their methods again, which waits for the loading to let go of the method
+    # tables, so the browser would stop responding while it loads.
+    world::UInt
 end
 
 function Browser(term::REPL.Terminals.TextTerminal, cat::Catalog=Catalog())
@@ -118,7 +128,7 @@ function Browser(term::REPL.Terminals.TextTerminal, cat::Catalog=Catalog())
                 (0.0, nothing), ReentrantLock(), Dict{Any,Set{Symbol}}(), false, LAYOUT[],
                 get(term.out_stream, :color, true)::Bool || REPL.Terminals.hascolor(term),
                 nothing, false, (0.0, 0.0, 0.0, 0.0), nothing, ManualHit[], SEARCH_INDIRECT[], 0, (0, 0), Inf, nothing,
-                tip_order(), 1, false, nothing)
+                tip_order(), 1, false, nothing, nothing, "", nothing, Base.get_world_counter())
     any(p -> p.role in (:project, :direct), cat.pkgs) || push!(b.expanded, :indirect)
     refresh_side!(b)
     b.side.cursor = 1 # the start page
@@ -644,28 +654,101 @@ end
 """
     load_package!(b, id)
 
-Load the package `id` with `import` in `Main`, then show it. Loading happens on the normal
-screen, so that precompilation output is visible.
+Load the package `id` with `import` in `Main`, in a task of its own, and show it once it is
+loaded. Meanwhile what loading prints, such as precompilation, shows in a panel above the
+footer, and the browser can still be used.
 """
 function load_package!(b::Browser, id::PkgId)
     # The precompile workload must not load whatever the active project depends on.
     Base.generating_output() && return
-    loaded = suspend(b) do
-        # Show the import as the REPL would have, had it been typed at the prompt.
-        print(IOContext(b.out, :color => b.color), styled("julia> ", :repl_prompt_julia))
-        println(b.out, "import ", id.name)
-        Core.eval(Main, Expr(:import, Expr(:., Symbol(id.name))))
-        println(b.out)
+    loading(b) && return (b.status = "Already " * lowercasefirst(b.loading); nothing)
+    b.console = ["julia> import " * id.name]
+    # Loading prints nothing while it precompiles, which can take minutes, so say so.
+    what = (Base.isprecompiled(id) ? "Loading " : "Precompiling ") * id.name
+    load() = Core.eval(Main, Expr(:import, Expr(:., Symbol(id.name))))
+    function done(ok)
+        ok || return
+        b.console = nothing
+        # Go to the package only if it is still what the browser shows.
+        go = current_key(b) == LoadTarget(id)
+        # The package's bindings are only visible in the latest world.
+        b.world = Base.get_world_counter()
+        in_world(show_loaded!, b, id, go)
     end
-    loaded || return
-    # The package's bindings are only visible in the latest world.
-    Base.invokelatest(show_loaded!, b, id)
+    in_console(load, done, b, what)
+    return
 end
 
-function show_loaded!(b::Browser, id::PkgId)
+loading(b::Browser) = b.load_task !== nothing && !istaskdone(b.load_task)
+
+in_world(f, b::Browser, args...) = Base.invoke_in_world(b.world, f, b, args...)
+
+# A package being loaded prints to the panel until it is done, so the browser stays open.
+function stay_open!(b::Browser)
+    loading(b) || return
+    b.quit = false
+    b.result = nothing
+    b.status = b.loading * " The browser can close once it is done."
+end
+
+# Run `f` in a task, with what it prints shown in the console panel as it comes, and then
+# `done(ok)` with the browser's lock held. Output is redirected for the whole process, which is
+# why only one runs at a time and the browser does not close while it runs.
+function in_console(f, done, b::Browser, what::String)
+    t0 = time()
+    b.loading = what * "…"
+    pipe = Pipe()
+    Base.link_pipe!(pipe; reader_supports_async=true, writer_supports_async=true)
+    redraw() = try
+        b.live && in_world(draw, b)
+    catch
+    end
+    # Started here, on the browser's thread, so that they run while `f` keeps its own busy.
+    reader = @async for line in eachline(pipe)
+        @lock b.lock (push!(b.console, console_text(line)); redraw())
+    end
+    clock = Timer(1; interval=1) do _
+        @lock b.lock (b.loading = string(what, "… ", round(Int, time() - t0), " s"); redraw())
+    end
+    b.load_task = Threads.@spawn :default begin
+        ok = false
+        try
+            redirect_stdio(stdout=pipe, stderr=pipe) do
+                Base.CoreLogging.with_logger(f, Base.CoreLogging.SimpleLogger(pipe))
+            end
+            ok = true
+        catch err
+            @lock b.lock begin
+                b.status = "Error: " * first_line(err)
+                append!(b.console, console_text.(split(sprint(showerror, err), '\n')))
+            end
+        finally
+            close(clock)
+            close(pipe.in)
+            wait(reader)
+            @lock b.lock begin
+                b.loading = ""
+                try
+                    done(ok)
+                catch err
+                    b.status = "Error: " * first_line(err)
+                end
+                redraw()
+            end
+        end
+    end
+    return
+end
+
+# A line of output as plain text, as a terminal would leave it after any carriage return.
+console_text(line::AbstractString) = replace(last(split(line, '\r')), r"\e\[[0-9;?]*[A-Za-z]" => "")
+
+function show_loaded!(b::Browser, id::PkgId, go::Bool=true)
     b.cat = Catalog()
     empty!(b.pages)
     refresh_side!(b)
+    b.status = "Loaded " * id.name
+    go || return
     m = Base.root_module(id)
     navigate!(b) do
         b.focus = :side
@@ -899,7 +982,9 @@ build(rb::RowBuilder) = isempty(rb.parts) ? AnnotatedString("") : annotatedstrin
 
 function hint_segments(b::Browser)
     narrow = b.width < 100 ? [("w", "layout")] : Tuple{String,String}[]
-    if b.help
+    if b.console !== nothing && isempty(b.loading)
+        return [("any key", "close")]
+    elseif b.help
         return [("esc", "close")]
     elseif b.typing
         return [("↑↓", "choose"), ("⏎", "open"), ("^T", b.textsearch ? "names" : "text"),
@@ -919,7 +1004,7 @@ function hint_segments(b::Browser)
     end
 end
 
-const HINT_KEYS = Dict("↑↓" => nothing, "←→" => nothing, "⏎" => KeyEvent(:enter),
+const HINT_KEYS = Dict("↑↓" => nothing, "any key" => nothing, "←→" => nothing, "⏎" => KeyEvent(:enter),
                        "⇥" => KeyEvent(:tab), "⌫" => KeyEvent(:backspace),
                        "esc" => KeyEvent(:escape), "{ }" => KeyEvent('}'),
                        "^T" => KeyEvent('t', CTRL), "^A" => KeyEvent('a', CTRL))
@@ -1518,6 +1603,7 @@ function frame(b::Browser)
     styled_rows[1] = header_bar(b)
     styled_rows[H] = footer_bar(b)
     overlay_card!(b, styled_rows)
+    overlay_console!(b, styled_rows)
     for r in 1:H
         rows[r] = ansi(styled_rows[r], b.color)
     end
@@ -1726,7 +1812,8 @@ function overlay_card!(b::Browser, rows::Vector{AnnotatedString{String}})
     h = length(lines) + 2
     r0, c0 = b.hover_at
     top = r0 + h <= b.height - 1 ? r0 + 1 : max(2, r0 - h)
-    left = clamp(c0, 1, max(1, b.width - cw + 1))
+    # a little to the right of the pointer, so that it does not cover what it describes
+    left = clamp(c0 + 2, 1, max(1, b.width - cw + 1))
     border = :REPL_DocBrowser_border
     box = AnnotatedString{String}[styled("╭" * "─"^(cw - 2) * "╮", border)]
     for l in lines
@@ -1738,6 +1825,32 @@ function overlay_card!(b::Browser, rows::Vector{AnnotatedString{String}})
         2 <= r <= b.height - 1 || continue
         rows[r] = splice_cols(rows[r], left, piece)
         push!(b.hits, Hit(r, left:left+cw-1, (:card,)))
+    end
+end
+
+# Draw the console panel over the rows just above the footer: the import, and the last lines
+# that loading printed.
+function overlay_console!(b::Browser, rows::Vector{AnnotatedString{String}})
+    b.console === nothing && return
+    lines = b.console
+    n = min(length(lines), max(1, (b.height - 3) ÷ 3))
+    shown = n == length(lines) ? lines : [lines[1]; lines[end-n+2:end]]
+    border = :REPL_DocBrowser_border
+    w = b.width
+    title = isempty(b.loading) ? " Loading failed " : " $(b.loading) "
+    box = AnnotatedString{String}[annotatedstring(styled("╭─", border), styled(title, :REPL_DocBrowser_section),
+                                                  styled("─"^max(0, w - 4 - textwidth(title)) * "╮", border))]
+    for (i, l) in enumerate(shown)
+        text = i == 1 ? annotatedstring(styled("julia> ", :repl_prompt_julia), l[8:end]) : AnnotatedString(l)
+        push!(box, annotatedstring(styled("│ ", border), fit(text, w - 4), styled(" │", border)))
+    end
+    push!(box, styled("╰" * "─"^(w - 2) * "╯", border))
+    top = max(2, b.height - length(box))
+    for (i, piece) in enumerate(box)
+        r = top + i - 1
+        r <= b.height - 1 || continue
+        rows[r] = piece
+        push!(b.hits, Hit(r, 1:w, (:console,)))
     end
 end
 
@@ -2306,6 +2419,8 @@ isplain(ev::KeyEvent, c::Char) = ev.key === :char && ev.char == c && ev.mods & (
 isctrl(ev::KeyEvent, c::Char) = ev.key === :char && ev.char == c && ev.mods == CTRL
 
 function handle!(b::Browser, ev::KeyEvent)
+    # The panel left by a failed load goes with the next key.
+    b.console === nothing || !isempty(b.loading) || (b.console = nothing; return true)
     hide_card!(b)
     if b.sel !== nothing && !(ev.key in (:up, :down, :pageup, :pagedown))
         b.sel = nothing
@@ -2455,6 +2570,7 @@ function pane_at(b::Browser, row::Int, col::Int)
 end
 
 function handle!(b::Browser, ev::MouseEvent)
+    b.console === nothing || !isempty(b.loading) || ev.action !== :press || (b.console = nothing; return true)
     if b.dragging && ev.action === :drag
         return drag_selection!(b, ev.row, ev.col)
     elseif b.dragging && ev.action === :release
@@ -2501,6 +2617,7 @@ function handle!(b::Browser, ev::MouseEvent)
         b.sel = nothing
         FIRST_OPEN[] = false
         h = hit_at(b, ev.row, ev.col)
+        h !== nothing && h.action == (:console,) && return false
         if h !== nothing && h.action == (:card,) && b.card !== nothing
             subject = b.card[2]
             hide_card!(b)
@@ -2760,7 +2877,20 @@ function drain_mouse(io::IO)
 end
 
 # Drawn with `rich_faces` when the terminal allows, except where the user has set a face.
+# The browser runs on an interactive thread when Julia has one, so that a package it loads on
+# a default thread does not hold it up.
 function run!(b::Browser)
+    Threads.nthreads(:interactive) > 0 && Threads.threadpool() !== :interactive || return run_here!(b)
+    t = Threads.@spawn :interactive run_here!(b)
+    try
+        return fetch(t)
+    catch err
+        err isa TaskFailedException && throw(err.task.exception)
+        rethrow()
+    end
+end
+
+function run_here!(b::Browser)
     faces = rich_faces()
     custom = hasproperty(StyledStrings.FACES, :modifications) ? values(StyledStrings.FACES.modifications) : ()
     StyledStrings.withfaces(Iterators.filter(((k, _),) -> !any(m -> haskey(m, k), custom), faces)) do
@@ -2791,8 +2921,7 @@ end
 # Draw again if the terminal has changed size, or it is time for a card to show.
 function tick(b::Browser)
     @lock b.lock try
-        # Packages loaded from the browser are only visible in the latest world.
-        b.quit || ((check_size!(b) | Base.invokelatest(show_card!, b)) && Base.invokelatest(draw, b))
+        b.quit || ((check_size!(b) | in_world(show_card!, b)) && in_world(draw, b))
     catch err
         # shown by the next draw, as for a key that fails
         b.status = "Error: " * first_line(err)
@@ -2824,13 +2953,14 @@ function run_screen!(b::Browser)
             ev === nothing && continue
             @lock b.lock begin
                 changed = try
-                    Base.invokelatest(handle!, b, ev)
+                    in_world(handle!, b, ev)
                 catch err
                     err isa InterruptException && rethrow()
                     b.status = "Error: " * first_line(err)
                     true
                 end
-                changed && !b.quit && Base.invokelatest(draw, b)
+                b.quit && stay_open!(b)
+                changed && !b.quit && in_world(draw, b)
             end
             # A click that closes the browser is followed by its release, which would
             # otherwise be typed at the prompt.
