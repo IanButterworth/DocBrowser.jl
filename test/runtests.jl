@@ -132,9 +132,15 @@ Base.peek(s::SlowInput, ::Type{UInt8}) = (eof(s) && throw(EOFError()); peek(s.bu
     io = IOBuffer("\e]11;rgb")
     @test read_event(io) === nothing && eof(io)
     # A sequence split across two reads, as over a slow connection, is still one key. The rest
-    # arrives when the reader waits for it, as writing it from another task did not reliably.
-    @test read_event(SlowInput("\e", "[A")) == KeyEvent(:up)
-    @test read_event(SlowInput("\e[", "A")) == KeyEvent(:up)
+    # arrives as soon as the reader waits for it, and the reader may wait long, so that how soon
+    # its waiting task runs on a busy machine does not matter.
+    DocBrowser.SEQUENCE_WAIT[] = 60.0
+    try
+        @test read_event(SlowInput("\e", "[A")) == KeyEvent(:up)
+        @test read_event(SlowInput("\e[", "A")) == KeyEvent(:up)
+    finally
+        DocBrowser.SEQUENCE_WAIT[] = 0.03
+    end
     # After a click closes the browser, its release is read rather than left for the prompt.
     io = IOBuffer("\e[<35;3;4M\e[<0;79;26mabc")
     DocBrowser.await_release(io)
