@@ -74,6 +74,8 @@ function lookup(query::AbstractString; outline::Bool=false, section::Int=0, brie
     title = something(place_ref(b.cat, key, 0), link_ref(b, key, key), key_title(b, key))
     v = page_version(key)
     println(io, "# ", title, v === nothing ? "" : "  ($v)")
+    path = page_path(key, p)
+    path === nothing || println(io, "Path: ", path)
     key isa LoadTarget && println(io, "(", key.id.name, " is not loaded, so its docstrings cannot be read. ",
                                   "To load it, which runs its code, ", load_hint(), ".)")
     if outline
@@ -95,11 +97,14 @@ function lookup(query::AbstractString; outline::Bool=false, section::Int=0, brie
         text = String(p.lines[li])
         # the place in the margin of a block of code that copies it is not part of the text
         spots = [s for s in p.spots if s.line == li && !(s.target isa CodeTarget)]
-        # a source location shows only its file's name, which a program cannot open
+        # A source location shows only its file's name, or its path from `~`, which a program
+        # cannot always open.
         for s in spots
             s.target isa SourceTarget || continue
-            full = string(contractuser(s.target.file), ':', s.target.line)
-            occursin(full, text) || (text = replace(text, string(basename(s.target.file), ':', s.target.line) => full))
+            full = string(s.target.file, ':', s.target.line)
+            occursin(full, text) && continue
+            short = string(contractuser(s.target.file), ':', s.target.line)
+            text = replace(text, (occursin(short, text) ? short : string(basename(s.target.file), ':', s.target.line)) => full)
         end
         marks = Tuple{Int,String}[(last(s.cols), "[$(numbers[i])]") for (i, s) in enumerate(p.spots)
                                   if s.line == li && haskey(numbers, i)]
@@ -113,10 +118,17 @@ function lookup(query::AbstractString; outline::Bool=false, section::Int=0, brie
             println(io, "[", n, "] ", ref)
         end
     end
-    # the page lists its sources itself, unless it has only the one it was made from
-    listed = any(s -> s.target isa SourceTarget && s.line in lines, p.spots)
-    p.source === nothing || listed || println(io, "\nSource: ", contractuser(p.source.file), ":", p.source.line)
     return String(take!(io))
+end
+
+# The file that a page is read from, as a path a program can open: the Markdown of a page of a
+# manual, the source of a docstring, or the directory of a package.
+function page_path(@nospecialize(key), p::Page)
+    key isa ManualTarget && return key.path
+    key isa NameEntry && return p.source === nothing ? nothing : string(p.source.file, ':', p.source.line)
+    key isa ModuleTarget && return something(pkgdir(key.mod), Some(nothing))
+    key isa LoadTarget && return unloaded_dir(key.id)
+    return nothing
 end
 
 # Whether line `li` only has buttons, such as the one that loads a package, which mean nothing
@@ -219,7 +231,8 @@ function find_docs(query::AbstractString; text::Bool=false, internal::Bool=false
     for h in first(search_manual(b.cat, query; text), limit)
         ref = something(page_ref(h.path), h.path)
         isempty(h.heading) || (ref *= "#" * slugify(h.heading))
-        println(io, ref, "  manual: ", hit_title(b.cat, h))
+        # and the file, which can be read directly, unless that is what `show` takes
+        println(io, ref, "  manual: ", hit_title(b.cat, h), startswith(ref, h.path) ? "" : "  " * h.path)
     end
     out = String(take!(io))
     return isempty(out) ? "Nothing matches $(repr(query)).\n" : out
@@ -246,6 +259,8 @@ function list_names(mod::Union{Module,AbstractString}; internal::Bool=false, loa
     end
     io = IOBuffer()
     println(io, "# ", display_name(mod))
+    dir = pkgdir(mod)
+    dir === nothing || println(io, "Path: ", dir)
     kind = :none
     for e in module_entries(b.cat, mod)
         (internal || e.vis !== :internal) && !e.deprecated || continue
@@ -343,8 +358,10 @@ function link_ref(b::Browser, key, @nospecialize(t))
     t isa URLTarget && return t.url
     t isa LoadTarget && return isempty(t.then) ? t.id.name : string(t.id.name, '.', t.then)
     if t isa ManualTarget
-        ref = something(page_ref(t.path), t.path)
-        return isempty(t.anchor) ? ref : string(ref, '#', t.anchor)
+        # what `show` takes, then the file, which can be read directly
+        ref = page_ref(t.path)
+        ref === nothing && return isempty(t.anchor) ? t.path : string(t.path, '#', t.anchor)
+        return string(ref, isempty(t.anchor) ? "" : "#" * t.anchor, "  ", t.path)
     end
     if t isa AnchorTarget
         ref = key isa ManualTarget ? place_ref(b.cat, key, t.heading) : nothing
@@ -387,7 +404,8 @@ const AGENT_USAGE = """
           (`manual/arrays#Broadcasting`), as plain text. Links end in a number, listed at the
           end in a form `show` takes. `--outline` lists the numbered headings of a long page,
           `--section N` gives one of them, and `--brief` the start of each docstring.
-          `show manual` lists the pages of Julia's manual.
+          `show manual` lists the pages of Julia's manual. `Path:` gives the local file the
+          page comes from, which can be read directly.
       names <module> [--internal] [--load]
           The names of a module, by kind, and whether each is exported or public.
 

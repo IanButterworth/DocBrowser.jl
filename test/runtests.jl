@@ -2038,9 +2038,15 @@ end
     @test occursin("    julia> 1 + 1\n    2\n", DocBrowser.lookup("Shape"))
     # The outline of a manual page, and one of its sections.
     outline = DocBrowser.lookup("manual/arrays"; outline=true)
-    k = findfirst(l -> endswith(l, " Broadcasting"), split(outline, '\n')) - 1
+    k = parse(Int, match(r"§(\d+) Broadcasting\n", outline)[1])
     section = DocBrowser.lookup("manual/arrays"; section=k)
     @test occursin("element-by-element", section) && !occursin("Array literals\n", section)
+    # Each answer says where its file is, to be read directly: the page's, and that of a linked page.
+    arrays = joinpath(DocBrowser.manual_dir(), "manual", "arrays.md")
+    @test occursin("\nPath: $arrays\n", section)
+    @test occursin(r"\[\d+\] manual/[\w-]+#[\w-]+  \S+\.md\n", section)
+    sortpage = DocBrowser.lookup("Base.sort!")
+    @test occursin(r"\nPath: \S+sort\.jl:\d+\n", sortpage) && !occursin("~/", sortpage)
     @test DocBrowser.lookup("manual/arrays#Broadcasting") == section
     # Searching, and the names of a module.
     @test occursin("Base.sort!  function, exported", DocBrowser.find_docs("sort!"))

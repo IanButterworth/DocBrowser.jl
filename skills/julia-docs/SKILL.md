@@ -37,7 +37,11 @@ Run them in the project's directory, or pass `--project PATH`.
   `From Module:` line, and the outline says which one each heading is in.
 - A mistyped option is an error, with exit code 2; it is never silently ignored.
 - Links in a page end in a number, as in `sortslices[2]`. The `Links:` list at the end gives
-  what each number leads to, in a form `show` takes.
+  what each number leads to, in a form `show` takes, and for a page of a manual, its file.
+- Each page's `Path:` line gives the file it comes from: the Markdown of a manual page, or the
+  source file and line of a docstring. `find` gives the file of each manual section too. These
+  are local files of the installed versions, so read or search them directly, for example with
+  `grep`, when that is quicker than more `show` commands.
 - A docstring page ends with its methods and the file and line where each is defined. Read
   that file when the docstring does not answer the question.
 
