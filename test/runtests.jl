@@ -1,6 +1,8 @@
 using Test
 using REPL
 import StyledStrings
+# The browser downloads package manuals by itself when it opens, which tests must not.
+ENV["JULIA_DOCBROWSER_AUTODOWNLOAD"] = "no"
 # Loading the browser should not load Downloads, unless something already has.
 const DOWNLOADS_PRELOADED = haskey(Base.loaded_modules,
     Base.PkgId(Base.UUID("f43a241f-c20a-4ad4-852c-f6b1247861c6"), "Downloads"))
@@ -1986,6 +1988,43 @@ end
     enter = help.keymap_dict['\r']
     DocBrowser.install(repl)
     @test help.keymap_dict['\r'] === enter
+end
+
+@testset "downloaded package manuals" begin
+    depot = mktempdir()
+    pushfirst!(DEPOT_PATH, depot)
+    DocBrowser.RECORDS[] = nothing
+    DocBrowser.ANY_FETCHED[] = nothing
+    try
+        pkg(name) = (dir = joinpath(depot, "packages", name, "abcde"); mkpath(dir);
+                     write(joinpath(dir, "Project.toml"), "name = \"$name\"\nversion = \"1.0.0\"\n"); dir)
+        foo, bar, baz = pkg("Foo"), pkg("Bar"), pkg("Baz")
+        @test DocBrowser.wants_manual(foo) && DocBrowser.fetched_docs_dir(foo) === nothing
+        # A manual downloaded for a package is kept once by its tree hash, and found again in another session.
+        sha = "1"^40
+        src = joinpath(DocBrowser.tree_dir(depot, sha), "docs", "src")
+        mkpath(src)
+        write(joinpath(src, "index.md"), "# Foo\n\nIts manual.\n")
+        DocBrowser.save_records!(Dict("Foo/abcde" => Dict{String,Any}("tree" => sha, "source" => "o/r v1.0.0 docs")))
+        DocBrowser.RECORDS[] = nothing
+        @test DocBrowser.fetched_docs_dir(foo) == DocBrowser.tree_dir(depot, sha) && !DocBrowser.wants_manual(foo)
+        @test length(DocBrowser.own_or_fetched_docs(foo).pages) == 1
+        # One that cannot have a manual is not looked for again; one that failed is, after a day.
+        DocBrowser.save_records!(Dict("Bar/abcde" => Dict{String,Any}("none" => "at the top of its repository"),
+                                      "Baz/abcde" => Dict{String,Any}("failed" => round(Int, time()), "reason" => "x")))
+        @test !DocBrowser.wants_manual(bar) && !DocBrowser.wants_manual(baz)
+        DocBrowser.save_records!(Dict("Baz/abcde" => Dict{String,Any}("failed" => round(Int, time()) - 2 * 86400, "reason" => "x")))
+        @test DocBrowser.wants_manual(baz)
+    finally
+        popfirst!(DEPOT_PATH)
+        DocBrowser.RECORDS[] = nothing
+        DocBrowser.ANY_FETCHED[] = nothing
+    end
+    # While manuals download, the footer says so; the tests turn downloading by itself off.
+    b = test_browser()
+    b.fetch_note = "Downloading the manuals of Foo…"
+    @test occursin("Downloading the manuals of Foo…", strip_ansi(frame(b)[end]))
+    @test !DocBrowser.autodownload_enabled()
 end
 
 foreach((r, v) -> r[] = v, SETTINGS, SAVED)

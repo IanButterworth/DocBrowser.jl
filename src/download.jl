@@ -180,7 +180,8 @@ end
 # Julia can crash if it exits while a download is running, so a running one gets a few seconds
 # to finish first.
 function wait_for_download()
-    t = @lock DOWNLOAD_LOCK MANUAL_DOWNLOAD[]
-    t === nothing || istaskdone(t) || within(() -> wait(t), 5.0)
+    for t in @lock DOWNLOAD_LOCK (MANUAL_DOWNLOAD[], AUTODOWNLOAD[])
+        t === nothing || istaskdone(t) || within(() -> wait(t), 5.0)
+    end
     return nothing
 end

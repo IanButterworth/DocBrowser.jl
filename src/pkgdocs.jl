@@ -190,9 +190,8 @@ function docs_dirs(cat::Catalog)
         dir = pkgdir(p.mod)
         dir === nothing && continue
         push!(dirs, (joinpath(dir, "docs") * sep, p))
-        for depot in DEPOT_PATH
-            push!(dirs, (joinpath(depot, fetched_docs_rel(dir), "docs") * sep, p))
-        end
+        fetched = fetched_docs_dir(dir)
+        fetched === nothing || push!(dirs, (joinpath(fetched, "docs") * sep, p))
     end
     cat.docs_dirs = (length(cat.pkgs), dirs)
     return dirs

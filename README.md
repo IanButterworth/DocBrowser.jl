@@ -92,8 +92,11 @@ Pages that the documentation build writes, such as Literate tutorials, are not i
 When some are missing, the package's pages say so and link to its online docs.
 
 A package in a subdirectory of a repository, such as GLMakie in Makie.jl, is installed without
-a manual that is kept elsewhere in the repository. Its page offers to download it, from the
-release of the installed version. A package can say where its manual is, and where its hosted
+a manual that is kept elsewhere in the repository. The browser downloads such manuals in the
+background when it opens, from the release of each installed version, saying so in its footer,
+and a package's page has a button to try again. Packages of one repository are looked for
+together and share one copy, so that GitHub's limit of 60 requests an hour without a
+`GITHUB_TOKEN` is seldom reached; what is left is tried again later. A package can say where its manual is, and where its hosted
 docs are, in a `[docs]` section of its project file:
 
 ```toml
@@ -110,6 +113,9 @@ browser looked and why it found no more.
 - `JULIA_DOCBROWSER_SEARCH_URL`: the search engine for packages whose repository the browser
   cannot find, with `%s` where the query goes, e.g. `https://www.google.com/search?q=%s`.
   The default is DuckDuckGo.
+- `JULIA_DOCBROWSER_AUTODOWNLOAD`: `no` stops the browser from downloading packages' manuals
+  by itself. The button on a package's page still does.
+- `GITHUB_TOKEN`: raises GitHub's limit on the requests that finding those manuals makes.
 
 ## How it hooks into the REPL
 

@@ -87,6 +87,7 @@ function precompile_workload()
     FIRST_OPEN[] = true
     # what this machine has downloaded is for each session to find out, not the cache to keep
     ANY_FETCHED[] = nothing
+    RECORDS[] = nothing
     nothing
 end
 
