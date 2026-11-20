@@ -156,6 +156,106 @@ function entry_sha(listing::String, base::AbstractString)
     return nothing
 end
 
+"""
+    DocBrowser.explain_docs(pkg; online=false, io=stdout)
+
+Say where the browser looked for the documentation of package `pkg` (a module, or the name of
+a package of the active project), what it found, and why it did not find more: the manual in
+the package's source, its list of pages, a downloaded manual, the `[docs]` section of its
+project file, its repository, and the link to its hosted documentation. With `online`, it also
+looks for the release of the installed version in the repository, as downloading the manual
+does. For package authors, it says what would let the browser find more.
+"""
+function explain_docs(pkg::Union{Module,AbstractString}; online::Bool=false, io::IO=stdout)
+    id = pkg isa Module ? PkgId(Base.moduleroot(pkg)) : Base.identify_package(String(pkg))
+    id === nothing && return println(io, "$pkg is not a package of the active project.")
+    dir = pkg isa Module ? pkgdir(pkg) : unloaded_dir(id)
+    dir === nothing && return println(io, "$(id.name) is not installed.")
+    project = isfile(joinpath(dir, "Project.toml")) ? Base.parsed_toml(joinpath(dir, "Project.toml")) : Dict{String,Any}()
+    v = get(project, "version", nothing)
+    println(io, id.name, v isa String ? " $v" : "", "  ", contractuser(dir))
+    line(what, text) = println(io, "  ", rpad(what, 16), text)
+    hints = String[]
+    # the manual in the package's source
+    docs = package_docs(dir)
+    if isdir(joinpath(dir, "docs"))
+        scripts = filter(f -> endswith(f, ".jl"), readdir(joinpath(dir, "docs")))
+        lists = [(f, something(doc_page_list(read(joinpath(dir, "docs", f), String)), [])) for f in scripts]
+        best = isempty(lists) ? nothing : argmax(x -> length(x[2]), lists)
+        line("docs/", "$(length(docs.pages)) pages of a manual")
+        if best === nothing || isempty(best[2])
+            line("page list", isempty(scripts) ? "no build script in docs/" :
+                 "none that is a literal list in $(join(scripts, ", ")); the pages are in file order")
+        else
+            line("page list", "$(length(best[2])) pages, from docs/$(best[1])")
+        end
+        isempty(docs.missing) || line("missing", "$(length(docs.missing)) listed pages are not in the source, " *
+                                      "such as $(join(first(docs.missing, 3), ", "))")
+        isempty(docs.generator) || line("generated", "some pages are written by $(docs.generator) when the docs are built")
+    else
+        line("docs/", "not in the package's directory")
+    end
+    # what the package says, and a downloaded manual
+    section = get(project, "docs", nothing)
+    if section isa AbstractDict
+        line("[docs]", join(("$k = $(repr(section[k]))" for k in ("url", "source") if haskey(section, k)), ", "))
+    else
+        line("[docs]", "none in its project file")
+    end
+    fetched = fetched_docs_dir(dir)
+    if fetched === nothing
+        line("downloaded", "none")
+    else
+        line("downloaded", "$(length(package_docs(fetched).pages)) pages, from $(strip(read(joinpath(fetched, "source.txt"), String)))")
+    end
+    # where it comes from
+    place = try
+        registry_place(dynamic(Base.require_stdlib)(PKG), id)
+    catch err
+        err isa InterruptException && rethrow()
+        line("repository", first_line(err))
+        nothing
+    end
+    if place !== nothing
+        repo, subdir = place
+        line("repository", repo * (isempty(subdir) ? "" : ", in its subdirectory $subdir"))
+        if isempty(docs.pages) && fetched === nothing && !isempty(subdir)
+            push!(hints, "The manual is not installed with $(id.name), as Pkg installs only its directory. " *
+                         "`DocBrowser.fetch_package_docs(\"$(id.name)\")`, or the button on its page, downloads it " *
+                         "from $(section isa AbstractDict && haskey(section, "source") ? section["source"] : "docs/src at the top of the repository").")
+            section isa AbstractDict && haskey(section, "source") ||
+                push!(hints, "Its authors can say where its manual is with `[docs] source = \"../docs/src\"` " *
+                             "in its project file, if it is not in docs/src at the top of the repository.")
+        end
+        if online && !isempty(subdir)
+            m = match(r"github\.com[/:]([^/]+)/([^/]+?)(?:\.git)?/?$", repo)
+            if m === nothing
+                line("release", "not looked for, as only GitHub repositories are supported")
+            else
+                hash = bytes2hex(Base.invokelatest(dynamic(Base.require_stdlib)(PKG).GitTools.tree_hash, dir)::Vector{UInt8})
+                ref = try
+                    something(release_tag(String(m[1]), String(m[2]), subdir, hash, dir), "none of the likely tags and commits has its tree hash $hash")
+                catch err
+                    err isa InterruptException && rethrow()
+                    "could not be looked for: " * first_line(err) *
+                        (isempty(get(ENV, "GITHUB_TOKEN", "")) ? " (a GITHUB_TOKEN raises GitHub's limit on requests)" : "")
+                end
+                line("release", ref)
+            end
+        end
+    end
+    # the hosted documentation
+    url = docs_url(dir)
+    own = section isa AbstractDict && haskey(section, "url")
+    line("hosted docs", url === nothing ? "no link to them in its README" : "$url, from its " * (own ? "[docs] section" : "README"))
+    url === nothing && !own &&
+        push!(hints, "Its authors can link its hosted docs with `[docs] url = \"…\"` in its project file.")
+    for h in hints
+        println(io, "\n", h)
+    end
+    return nothing
+end
+
 function github_get(path::String)
     headers = ["Accept" => "application/vnd.github+json", "User-Agent" => "DocBrowser.jl"]
     token = get(ENV, "GITHUB_TOKEN", "")

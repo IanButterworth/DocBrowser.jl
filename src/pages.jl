@@ -823,11 +823,22 @@ const BADGE_PATTERNS = (
 """
     docs_url(dir) -> Union{String, Nothing}
 
-The address of a package's full documentation, taken from the docs badge in its README,
-preferring the stable version over the development one.
+The address of a package's full documentation: the `url` in the `[docs]` section of its project
+file, for its version, or else a link in its README, preferring the stable version over the
+development one.
 """
 function docs_url(dir)
     (dir === nothing || !isdir(dir)) && return nothing
+    # The package's own word for it, in the `[docs]` section of its project file.
+    project = joinpath(dir, "Project.toml")
+    if isfile(project)
+        d = Base.parsed_toml(project)
+        section = get(d, "docs", nothing)
+        url = section isa AbstractDict ? get(section, "url", nothing) : nothing
+        v = get(d, "version", nothing)
+        url isa String && occursin(r"^https?://", url) &&
+            return v isa String ? replace(url, "{version}" => v) : replace(url, "v{version}" => "stable")
+    end
     readme = findfirst(f -> occursin(r"^readme(\.md)?$"i, f), readdir(dir))
     readme === nothing && return nothing
     text = @attempt read(joinpath(dir, readdir(dir)[readme]), String) return nothing

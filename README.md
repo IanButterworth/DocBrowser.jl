@@ -91,6 +91,20 @@ directory shows only its README and docstrings until its next release.
 Pages that the documentation build writes, such as Literate tutorials, are not in the source.
 When some are missing, the package's pages say so and link to its online docs.
 
+A package in a subdirectory of a repository, such as GLMakie in Makie.jl, is installed without
+a manual that is kept elsewhere in the repository. Its page offers to download it, from the
+release of the installed version. A package can say where its manual is, and where its hosted
+docs are, in a `[docs]` section of its project file:
+
+```toml
+[docs]
+url = "https://example.github.io/Example.jl/v{version}/"
+source = "../docs/src"
+```
+
+When a package's manual does not show, `DocBrowser.explain_docs("Example")` says where the
+browser looked and why it found no more.
+
 ## Settings
 
 - `JULIA_DOCBROWSER_SEARCH_URL`: the search engine for packages whose repository the browser

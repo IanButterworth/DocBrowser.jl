@@ -1832,7 +1832,15 @@ end
         @test DocBrowser.docs_url(dir) == "http://docs.p.org/stable"
         write(joinpath(dir, "README.md"), "See the [Julia manual](https://docs.julialang.org/en/v1/).")
         @test DocBrowser.docs_url(dir) === nothing
+        # The package's own `[docs] url` comes first, for the installed version.
+        write(joinpath(dir, "Project.toml"), "version = \"1.2.3\"\n\n[docs]\nurl = \"https://o.github.io/P.jl/v{version}/\"\n")
+        @test DocBrowser.docs_url(dir) == "https://o.github.io/P.jl/v1.2.3/"
+        rm(joinpath(dir, "Project.toml"))
     end
+    # Where the browser looked for a package's docs, and why it found no more.
+    report = sprint(io -> DocBrowser.explain_docs(DocBrowser; io))
+    @test startswith(report, "DocBrowser ") && occursin(r"docs/\s+\d+ pages of a manual", report)
+    @test occursin(r"\[docs\]\s+none in its project file", report) && occursin("hosted docs", report)
     # A standard library in Julia's repository has Julia's licence, and a JLL that of its library.
     pb = DocBrowser.PageBuilder(200)
     DocBrowser.add_links!(pb, Base.PkgId(Markdown), pkgdir(Markdown), :stdlib)

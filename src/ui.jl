@@ -1259,7 +1259,8 @@ function describe_target(b::Browser, p::Page, t)
         t.flag === :tip && return "shows the next tip (t)"
         t.flag === :tip_back && return "shows the previous tip (T)"
         t.flag === :download && return "downloads the manual again"
-        t.flag === :fetch_docs && return "downloads the package's manual from its repository, at the installed version"
+        t.flag === :fetch_docs &&
+            return "downloads the package's manual from its repository, at the installed version · DocBrowser.explain_docs says where the browser looked"
         return "finds every method that takes this type; this can take a moment"
     elseif t isa SectionTarget
         return "→ $(getfield(SECTION_TITLES, t.role))"
@@ -3390,7 +3391,8 @@ function fetch_docs!(b::Browser)
             "Downloaded $(id.name)'s manual"
         catch err
             err isa InterruptException && rethrow()
-            "Could not download $(id.name)'s manual: " * first_line(err)
+            "Could not download $(id.name)'s manual: " * first_line(err) *
+                " · DocBrowser.explain_docs(\"$(id.name)\"; online=true) says more"
         end
         @lock b.lock begin
             delete!(b.cat.pkgdocs, dir)
