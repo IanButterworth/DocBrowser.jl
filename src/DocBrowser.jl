@@ -7,7 +7,7 @@ module. Press Enter at an empty `help?>` prompt to open it, or call [`DocBrowser
 module DocBrowser
 
 import REPL
-using Base: PkgId, UUID, AnnotatedString, annotations, annotatedstring
+using Base: PkgId, UUID, AnnotatedString, annotations
 using Base.Docs: Binding, MultiDoc, DocStr
 using Markdown
 using StyledStrings: StyledStrings, Face, addface!, face!, AnnotatedIOBuffer
@@ -60,11 +60,14 @@ const FACES = (
 rich_faces(theme=terminal_theme(), bg=nothing) =
     rich_colours() && theme !== nothing ? theme_faces(theme, bg) : ()
 
+# StyledStrings can blend the terminal's own colours from Julia 1.14.
+const BLEND = isdefined(StyledStrings, :blend) ? getglobal(StyledStrings, :blend) : nothing
+
 function theme_faces(theme::Symbol, bg)
     rgb(c) = StyledStrings.SimpleColor(c)
     dark = theme === :dark
-    shade = if isdefined(StyledStrings, :blend) && terminal_theme() !== nothing
-        α -> StyledStrings.blend(:background, :foreground, α)
+    shade = if BLEND !== nothing && terminal_theme() !== nothing
+        α -> BLEND(:background, :foreground, α)
     else
         # StyledStrings does not know the terminal's colours before Julia 1.14, so the shades
         # are mixed here, from the background towards white or black.
@@ -99,7 +102,8 @@ function theme_faces(theme::Symbol, bg)
     )
 end
 
-rich_colours() = Base.get_have_truecolor() || get(Base.current_terminfo(), :colors, 0) >= 256
+rich_colours() = dynamic(Base.get_have_truecolor)()::Bool ||
+    dynamic(get)(dynamic(Base.current_terminfo)(), :colors, 0)::Int >= 256
 
 mix_colour(a::UInt32, b::UInt32, α) =
     reduce(|, (round(UInt32, (1 - α) * (a >> s & 0xff) + α * (b >> s & 0xff)) << s for s in (16, 8, 0)))
@@ -149,6 +153,13 @@ function within(f, timeout::Real)
     close(timer)
     return ok
 end
+
+# Calls whose arguments the browser cannot know the types of, or that packages extend, are left
+# to run time through `dynamic`. Otherwise a package that adds a method, such as a `String` for
+# its own kind of string, invalidates the compiled code of the browser that calls them, and
+# opening the browser compiles most of it again.
+dynamic(f) = Base.inferencebarrier(f)
+as_string(x) = x isa String ? x : dynamic(String)(x)::String
 
 include("catalog.jl")
 include("pages.jl")

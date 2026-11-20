@@ -25,6 +25,12 @@ is_bundled(m::Module) = in_stdlib_dir(pkgdir(m))
 # The standard library that a file under the standard libraries' directory belongs to.
 stdlib_name(path::AbstractString) = String(first(splitpath(relpath(path, normpath(Sys.STDLIB)))))
 
+# `Base.is_stdlib` reads the standard libraries' directory each time, and the sidebar asks for
+# every row of every frame.
+const STDLIBS = Dict{PkgId,Bool}()
+const STDLIBS_LOCK = ReentrantLock()
+is_stdlib(id::PkgId) = @lock STDLIBS_LOCK get!(() -> Base.is_stdlib(id), STDLIBS, id)
+
 first_line(err) = String(first(split(sprint(showerror, err), '\n')))
 
 """
@@ -93,6 +99,61 @@ struct ManualHit
     path::String
     heading::String
     score::Int
+    ManualHit(path, heading, score::Int) = new(as_string(path), as_string(heading), score)
+end
+
+"""
+    Matches()
+
+The matches of recent searches over one list of items, by query. Typing a query only adds to
+it, and a longer query matches fewer items, so each search looks only among the matches of
+an earlier query that it narrows.
+"""
+mutable struct Matches
+    items::Any # the list that the matches are indices into
+    found::Dict{String,Vector{Int}}
+    results::Dict{String,Any} # what each query found, ranked, for searches that keep it
+end
+Matches() = Matches(nothing, Dict{String,Vector{Int}}(), Dict{String,Any}())
+
+# The indices `i` of `items` for which `keep(i)`, where `narrows(old, query)` says whether
+# every match of `query` is a match of the earlier query `old`.
+function find_matches(keep, m::Matches, items::AbstractVector, query::String, narrows)
+    if m.items !== items
+        m.items = items
+        empty!(m.found)
+        empty!(m.results)
+    end
+    found = get(m.found, query, nothing)
+    found === nothing || return found
+    from = nothing
+    for (old, f) in m.found
+        narrows(old, query) && (from === nothing || length(f) < length(from)) && (from = f)
+    end
+    found = Int[i for i in something(from, eachindex(items)) if keep(i)]
+    if length(m.found) >= 64
+        empty!(m.found)
+        empty!(m.results)
+    end
+    return m.found[query] = found
+end
+
+# How many times `w` is in `text`, without overlaps, counting no further than `most`.
+function count_upto(w::AbstractString, text::String, most::Int)
+    n, i = 0, firstindex(text)
+    while n < most
+        r = findnext(w, text, i)
+        r === nothing && break
+        n += 1
+        i = nextind(text, last(r))
+    end
+    return n
+end
+
+# Whether text that has every word of `new` has every word of `old`.
+function words_narrow(old::String, new::String)
+    ow, nw = split(old), split(new)
+    return length(ow) <= length(nw) && all(i -> occursin(ow[i], nw[i]), eachindex(ow))
 end
 
 mutable struct Catalog
@@ -112,11 +173,15 @@ mutable struct Catalog
     # The names that the manuals of packages that are not loaded list, each with its package,
     # found on first use.
     unloaded_names::Union{Nothing,Vector{Tuple{String,PkgId}}}
+    name_matches::Matches
+    text_matches::Matches
+    section_matches::Matches
+    manual_index::Tuple{Any,Dict{String,Int}} # the place of each page in `manual`, by its path
 end
 
 function parse_uuids(deps)
     uuids = UUID[]
-    deps isa AbstractDict || return uuids
+    deps isa Dict{String,Any} || return uuids
     for v in values(deps)
         v isa String || continue
         u = tryparse(UUID, v)
@@ -148,7 +213,8 @@ function project_label()
     proj = Base.active_project()
     proj === nothing && return nothing
     name = @attempt REPL.projname(REPL.find_root_base_project(proj))
-    name === nothing && return nothing
+    name isa AbstractString || return nothing
+    name = String(name)::String
     return textwidth(name) > 30 ? first(name, 27) * "..." : name
 end
 
@@ -160,7 +226,7 @@ function unloaded_deps()
     for (name, v) in deps
         uuid = v isa String ? tryparse(UUID, v) : nothing
         uuid === nothing && continue
-        id = PkgId(uuid, String(name))
+        id = PkgId(uuid, as_string(name))
         Base.root_module_exists(id) || push!(ids, id)
     end
     return sort_by!(ids, id -> lowercase(id.name))
@@ -259,7 +325,7 @@ function Catalog()
     bymod = IdDict{Module,PkgEntry}(p.mod => p for p in pkgs)
     return Catalog(pkgs, bymod, documented_bindings(), IdDict{Module,Vector{NameEntry}}(), nothing,
                    unloaded_deps(), nothing, manual_pages(), nothing, Dict{String,Vector{Heading}}(), Dict{String,Vector{Heading}}(), nothing,
-                   Dict{String,Any}(), nothing)
+                   Dict{String,Any}(), nothing, Matches(), Matches(), Matches(), (nothing, Dict{String,Int}()))
 end
 
 function documented_bindings()
@@ -502,22 +568,30 @@ modules whose full name contains the part before the last dot.
 function search(cat::Catalog, query::AbstractString; internal::Bool=false, limit::Int=500)
     query = strip(query)
     isempty(query) && return NameEntry[]
-    modq, exact = "", String(query)
     dot = findlast('.', query)
-    if dot !== nothing && dot > firstindex(query) && dot < lastindex(query)
-        modq, exact = lowercase(query[1:prevind(query, dot)]), String(query[nextind(query, dot):end])
+    modq, exact = if dot !== nothing && dot > firstindex(query) && dot < lastindex(query)
+        lowercase(query[1:prevind(query, dot)]), String(query[nextind(query, dot):end])
+    else
+        "", String(query)
     end
     nameq = lowercase(exact)
+    idx = search_index(cat)
+    # A name that matches a query also matches the start of that query.
+    key = string(internal, ' ', modq, ' ', nameq)
+    narrows(old, new) = (o = split(old, ' '; limit=3); n = split(new, ' '; limit=3);
+                         o[1] == n[1] && o[2] == n[2] && startswith(n[3], o[3]))
+    found = find_matches(cat.name_matches, idx, key, narrows) do i
+        e = idx[i]
+        !internal && (e.vis === :internal || e.deprecated) && return false
+        name_score(nameq, lowercase(String(e.name))) > 0 || return false
+        return isempty(modq) || occursin(modq, lowercase(join(fullname(e.mod), '.')))
+    end
     best = Dict{Tuple{Module,Symbol},Tuple{Int,NameEntry}}()
-    for e in search_index(cat)
-        !internal && (e.vis === :internal || e.deprecated) && continue
+    for i in found
+        e = idx[i]
         name = String(e.name)
         sc = name_score(nameq, lowercase(name))
-        sc > 0 || continue
         sc += 100 * (name == exact)
-        if !isempty(modq)
-            occursin(modq, lowercase(join(fullname(e.mod), '.'))) || continue
-        end
         p = package_of(cat, e.mod)
         sc += p === nothing ? 0 : getfield(ROLE_BOOST, p.role)
         sc += getfield(VIS_BOOST, e.vis) + 15 * e.documented
@@ -562,7 +636,7 @@ function qualified_name(e::NameEntry)
             getglobal(Main, e.name) === entry_value(e)
         return String(e.name)
     end
-    return string(is_module_entry(e) ? module_binding(e.mod) : Binding(e.mod, e.name))
+    return dynamic(string)(is_module_entry(e) ? module_binding(e.mod) : Binding(e.mod, e.name))::String
 end
 
 ## Searching docstring text ##
@@ -578,7 +652,7 @@ function doc_texts(cat::Catalog)
             b isa Binding && multi isa MultiDoc || continue
             io = IOBuffer()
             for sig in multi.order, part in multi.docs[sig].text
-                part isa AbstractString && print(io, part, ' ')
+                part isa AbstractString && print(io, as_string(part), ' ')
             end
             push!(texts, b => lowercase(String(take!(io))))
         end
@@ -596,13 +670,19 @@ function search_text(cat::Catalog, query::AbstractString; internal::Bool=false, 
     words = split(lowercase(query))
     isempty(words) && return NameEntry[]
     hits = Tuple{Int,NameEntry}[]
-    for (b, text) in doc_texts(cat)
-        all(w -> occursin(w, text), words) || continue
+    texts = doc_texts(cat)
+    key = join(words, ' ')
+    found = find_matches(i -> all(w -> occursin(w, texts[i][2]), words), cat.text_matches, texts,
+                         key, words_narrow)
+    ranked = get(cat.text_matches.results, string(internal, ' ', limit, ' ', key), nothing)
+    ranked === nothing || return ranked::Vector{NameEntry}
+    for i in found
+        b, text = texts[i]
         e = @attempt classify(cat, b.mod, b.var)
         e === nothing && continue
         !internal && (e.vis === :internal || e.deprecated) && continue
         # The whole phrase beats scattered words, and a word in the name beats a mention.
-        sc = min(sum(w -> count(w, text), words), 50)
+        sc = min(sum(w -> count_upto(w, text, 50), words), 50)
         length(words) > 1 && occursin(join(words, ' '), text) && (sc += 500)
         name = lowercase(String(b.var))
         sc += 100 * count(w -> occursin(w, name), words)
@@ -611,5 +691,6 @@ function search_text(cat::Catalog, query::AbstractString; internal::Bool=false, 
         push!(hits, (sc, e))
     end
     sort_by!(hits, h -> -h[1])
-    return NameEntry[h[2] for h in Iterators.take(hits, limit)]
+    ranked = NameEntry[h[2] for h in Iterators.take(hits, limit)]
+    return cat.text_matches.results[string(internal, ' ', limit, ' ', key)] = ranked
 end

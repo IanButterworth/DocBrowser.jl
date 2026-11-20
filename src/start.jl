@@ -12,8 +12,9 @@ function read_tips(path::String)
     tips = Tuple{String,Union{Nothing,Tuple{Union{Symbol,String},String,String}}}[]
     for t in Base.parsed_toml(path)["tip"]
         os = get(t, "os", String[])
-        isempty(os) || any(s -> SYSTEMS[s](), os) || continue
-        VERSION >= VersionNumber(get(t, "julia", "1")) || continue
+        os isa AbstractVector || continue
+        isempty(os) || dynamic(any)(s -> SYSTEMS[s](), os)::Bool || continue
+        VERSION >= VersionNumber(as_string(get(t, "julia", "1"))) || continue
         docs = get(t, "docs", nothing)
         link = docs === nothing ? nothing : (docs == "manual" ? :manual : docs, t["page"], t["heading"])
         push!(tips, (replace(strip(t["text"]), r"\s*\n\s*" => " "), link))
@@ -189,7 +190,7 @@ function tip_box!(pb::PageBuilder, tip::Int, pos::Int)
     for (k, line) in enumerate(inner.lines)
         row = length(pb.lines) + 1
         pad = " "^max(0, w - 6 - textwidth(String(line)))
-        push!(pb.lines, annotatedstring("  ", styled("│  ", :REPL_DocBrowser_tip), line, pad,
+        push!(pb.lines, concat("  ", styled("│  ", :REPL_DocBrowser_tip), line, pad,
                                         styled("  │", :REPL_DocBrowser_tip)))
         for s in inner.spots
             s.line == k && push!(pb.spots, Spot(row, s.cols .+ 5, s.target))
