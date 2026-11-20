@@ -35,7 +35,7 @@ function ensure_manual()
 end
 
 load_hint() = CLI[] ? "run this again with `--load`" : "call this again with `load=true`"
-search_hint() = CLI[] ? "search for it with `docbrowser find`" : "search for it with `DocBrowser.find_docs`"
+search_hint() = CLI[] ? "search for it with `jldocs find`" : "search for it with `DocBrowser.find_docs`"
 
 """
     DocBrowser.lookup(query; outline=false, section=0, width=100, context=Main, load=false) -> String
@@ -93,7 +93,7 @@ function lookup(query::AbstractString; outline::Bool=false, section::Int=0, brie
            key isa LoadTarget && isempty(key.then) ? key.id.name : nothing
     manual = name === nothing ? nothing : findfirst(m -> m.name == name, package_manuals(b))
     manual === nothing || println(io, "(Its manual has $(length(package_manuals(b)[manual].pages)) pages: ",
-                                  CLI[] ? "`docbrowser show $name/`" : "`lookup(\"$name/\")`", " lists them.)")
+                                  CLI[] ? "`jldocs show $name/`" : "`lookup(\"$name/\")`", " lists them.)")
     if outline
         for (i, li) in enumerate(p.headings)
             from = docstring_from(p, li)
@@ -593,7 +593,7 @@ const AGENT_USAGE = """
     Julia's documentation, as plain text: the manual, and the docstrings of the packages in a
     project, at the versions it uses.
 
-    usage: docbrowser <command> [options]     (or: julia -m DocBrowser <command> [options])
+    usage: jldocs <command> [options]     (or: julia -m DocBrowser <command> [options])
 
       find <words> [--text] [--internal] [--limit N] [--load]
           Names, and sections of Julia's manual and of the project's packages' manuals, that
@@ -690,6 +690,6 @@ function (@main)(args::Vector{String})
 end
 
 function usage_error(msg::String)
-    println(stderr, "docbrowser: ", msg, ". See `docbrowser --help`.")
+    println(stderr, "jldocs: ", msg, ". See `jldocs --help`.")
     return 2
 end

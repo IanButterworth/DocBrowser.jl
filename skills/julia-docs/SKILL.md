@@ -1,15 +1,15 @@
 ---
 name: julia-docs
-description: Read Julia documentation from the command line with `docbrowser`, at the exact versions a project uses - the Julia manual, docstrings of Base, the standard libraries and the project's packages, their names, and where their methods are defined. Use before searching the web for anything about a Julia function, type, macro, module or package, when writing or fixing Julia code, or when a Julia name's behaviour, keyword arguments or exports are in doubt.
+description: Read Julia documentation from the command line with `jldocs`, at the exact versions a project uses - the Julia manual, docstrings of Base, the standard libraries and the project's packages, their names, and where their methods are defined. Use before searching the web for anything about a Julia function, type, macro, module or package, when writing or fixing Julia code, or when a Julia name's behaviour, keyword arguments or exports are in doubt.
 ---
 
-# Julia documentation with docbrowser
+# Julia documentation with jldocs
 
-`docbrowser` prints the pages of DocBrowser.jl as plain text. Its answers match the Julia
+`jldocs` prints the pages of DocBrowser.jl as plain text. Its answers match the Julia
 version and the package versions of the project, and need no network, so prefer it to the web
 and to memory for anything about Julia names.
 
-If `docbrowser` is not on the `PATH`, look in `~/.julia/bin`. Otherwise install it with
+If `jldocs` is not on the `PATH`, look in `~/.julia/bin`. Otherwise install it with
 `julia -e 'using Pkg; Pkg.Apps.add(url="https://github.com/IanButterworth/DocBrowser.jl")'`,
 or, in an environment that has DocBrowser, use `julia --project -m DocBrowser` in its place.
 
@@ -17,17 +17,17 @@ or, in an environment that has DocBrowser, use `julia --project -m DocBrowser` i
 
 Run them in the project's directory, or pass `--project PATH`.
 
-- `docbrowser find <words>`: names, and sections of Julia's manual and of the manuals of the
+- `jldocs find <words>`: names, and sections of Julia's manual and of the manuals of the
   project's packages, that match, best first, one a line. Each line starts with something
   `show` takes, and a section of a manual ends with its file. `--text` also searches the text
   of docstrings and manuals, which is done anyway when nothing else matches.
-- `docbrowser show <query>`: one page. A query is a name (`Base.sort!`, `DataFrames.select`),
+- `jldocs show <query>`: one page. A query is a name (`Base.sort!`, `DataFrames.select`),
   a module (`Base.Iterators`), a place in Julia's manual (`manual/arrays#Broadcasting`,
   `stdlib/Random`, `base/sort`), or a page of a package's manual
   (`GLMakie/explanations/figure#The-px_per_unit-factor`). `show manual` lists the pages of
   Julia's manual, and `show GLMakie/` those of a package's. The first line gives the version
   the page is about.
-- `docbrowser names <module>`: the names of a module, by kind, and whether each is exported
+- `jldocs names <module>`: the names of a module, by kind, and whether each is exported
   or public. `--internal` adds the others.
 - The exit code is 0 for an answer, 1 when nothing was found, and 2 for a mistake in the
   command, such as an option it does not take.

@@ -6,8 +6,8 @@ module. Press Enter at an empty `help?>` prompt to open it, or call [`DocBrowser
 
 The same pages are available as plain text, for programs and AI agents:
 [`DocBrowser.find_docs`](@ref) searches, [`DocBrowser.lookup`](@ref) shows a page, and
-[`DocBrowser.list_names`](@ref) lists the names of a module. From a shell, the `docbrowser` app
-(`pkg> app add`) and `julia -m DocBrowser` do the same; `docbrowser --help` says how.
+[`DocBrowser.list_names`](@ref) lists the names of a module. From a shell, the `jldocs` app
+(`pkg> app add`) and `julia -m DocBrowser` do the same; `jldocs --help` says how.
 """
 module DocBrowser
 
