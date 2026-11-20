@@ -75,6 +75,7 @@ mutable struct Browser
     doc_scroll::Int
     mark::Int       # the line of the heading last jumped to, marked so that the jump shows
     doc_line::Int   # the line of the page the cursor is on, or 0 for the top of the pane
+    pointer_block::Int # the first line of the block of code under the pointer, or 0
     link::Int
     pages::Dict{Tuple{Any,Int,Vector{Symbol}},Page}
     back::Vector{Snapshot}
@@ -147,7 +148,7 @@ function Browser(term::REPL.Terminals.TextTerminal, cat::Catalog=Catalog())
     b = Browser(term, term.in_stream, term.out_stream, cat, h, w, :side, :side,
                 ListState(1, 0), ListState(1, 0), SideRow[], NameRow[],
                 Set(DEFAULT_EXPANDED), Set{Symbol}(), Main, false, nothing, false,
-                NameEntry[], nothing, nothing, 0, 0, 0, 0, Dict{Tuple{Any,Int,Vector{Symbol}},Page}(),
+                NameEntry[], nothing, nothing, 0, 0, 0, 0, 0, Dict{Tuple{Any,Int,Vector{Symbol}},Page}(),
                 Snapshot[], Snapshot[], Hit[], nothing, "", false, false, nothing, String[],
                 (0.0, nothing), ReentrantLock(), Dict{Any,Set{Symbol}}(), :all, LAYOUT[],
                 get(term.out_stream, :color, true)::Bool || REPL.Terminals.hascolor(term),
@@ -612,8 +613,9 @@ function follow!(b::Browser, t::Target)
         t.flag === :tip ? next_tip!(b, 1) : t.flag === :tip_back ? next_tip!(b, -1) :
             t.flag === :download ? download_manual!(b) : toggle_flag!(b, t.flag)
     elseif t isa CodeTarget
-        b.result = t.code
-        b.quit = true
+        n = count(==('\n'), t.code) + 1
+        how = COPY[](b, t.code)
+        b.status = "Copied $n line$(n == 1 ? "" : "s") of code $how" * (t.julia ? " · y on the code puts it at the prompt" : "")
     elseif t isa URLTarget
         open_url(b, t.url)
     elseif t isa LoadTarget
@@ -970,6 +972,33 @@ function current_name(b::Browser)
     return nothing
 end
 
+# What the ⧉ of the block of code that line `li` of the page is in copies, or `nothing`.
+function code_at(b::Browser, li::Int)
+    p = page(b, current_key(b), doc_width(b))
+    i = copy_spot(p, code_block_start(p, li))
+    return i === nothing ? nothing : p.spots[i].target::CodeTarget
+end
+
+# The first line of the block of code that line `li` is in, or 0.
+function code_block_start(p::Page, li::Int)
+    li in eachindex(p.lines) && is_code_line(p.lines[li]) || return 0
+    while li > 1 && is_code_line(p.lines[li-1])
+        li -= 1
+    end
+    return li
+end
+
+# The place that copies the block of code starting at line `start`.
+copy_spot(p::Page, start::Int) = findfirst(s -> s.line == start && s.target isa CodeTarget, p.spots)
+
+# The link that ⏎ follows with the cursor on line `li`: one on the line, or else the ⧉ of the
+# block of code it is in. Zero for none.
+function line_link(p::Page, li::Int)
+    i = findfirst(s -> s.line == li && !(s.target isa CodeTarget), p.spots)
+    i === nothing || return i
+    return something(copy_spot(p, code_block_start(p, li)), 0)
+end
+
 ## Layout ##
 
 const LAYOUTS = (:auto, :three, :two, :one)
@@ -1111,11 +1140,17 @@ function hint_segments(b::Browser)
                 ("^A", b.indirect ? "direct only" : "+indirect"), ("⇥", "results"), ("esc", "cancel")]
     elseif b.focus === :doc
         p = page(b, current_key(b), doc_width(b))
-        hints = [("↑↓", "scroll"), ("⇥", "next link"), ("⏎", "follow"), ("[ ]", "back/forward")]
+        # On code, what can be done with it comes first, as its ⧉ says little by itself.
+        code = code_at(b, b.doc_line)
+        oncode = code !== nothing
+        hints = !oncode ? [("↑↓", "scroll"), ("⇥", "next link"), ("⏎", "follow"), ("[ ]", "back/forward")] :
+            code.julia ? [("⏎", "copy code"), ("y", "send it to prompt"), ("↑↓", "scroll"), ("⇥", "next link")] :
+            [("⏎", "copy code"), ("↑↓", "scroll"), ("⇥", "next link")]
         isempty(p.headings) || push!(hints, ("{ }", "headings"))
         any(s -> s.target == ToggleTarget(:extended), p.spots) && push!(hints, ("x", "extended"))
         current_key(b) === :start && push!(hints, ("t T", "tips"))
-        return vcat(narrow, hints, [("/", "search"), ("y", "send to prompt"), ("e", "source"), ("c", "link")])
+        return vcat(narrow, hints, [("/", "search")], oncode ? Tuple{String,String}[] : [("y", "send to prompt")],
+                    [("e", "source"), ("c", "link")])
     else
         # On a narrow terminal the layout matters most, so it comes first.
         return vcat(narrow, [("↑↓", "move"), ("⏎", "open"), ("←→", "panes"), ("/", "search"),
@@ -1210,7 +1245,7 @@ function describe_target(b::Browser, p::Page, t)
         return "↓ runs import $(t.id.name), then shows its documentation"
     elseif t isa CodeTarget
         n = count(==('\n'), t.code) + 1
-        return "⧉ closes the browser and puts $n line$(n == 1 ? "" : "s") of code at the prompt"
+        return "⧉ copies $n line$(n == 1 ? "" : "s") of code" * (t.julia ? " · y on the code puts it at the prompt" : "")
     elseif t isa ManualTarget
         i = manual_page_of(b.cat, t.path)
         title = i === nothing ? basename(dirname(dirname(dirname(t.path)))) : b.cat.manual[i].title
@@ -1682,6 +1717,7 @@ function draw_doc(b::Browser, x::Int, w::Int)
         b.doc_scroll, b.link = under !== nothing && under[1] == key ? (under[2], under[3]) : (0, 0)
         b.mark = 0
         b.doc_line = 0
+        b.pointer_block = 0
         key === :help || (b.under_help = nothing)
         # What was under the pointer, and what was selected, belonged to the old page.
         b.hover = nothing
@@ -1702,6 +1738,7 @@ function draw_doc(b::Browser, x::Int, w::Int)
         thumb = (start + 1):(start + size)
     end
     lines = AnnotatedString{String}[]
+    cursor_block = b.focus === :doc ? code_block_start(p, b.doc_line) : 0
     for k in 1:n
         li = b.doc_scroll + k
         line = li <= length(p.lines) ? copy_line(p.lines[li]) : AnnotatedString("")
@@ -1709,10 +1746,21 @@ function draw_doc(b::Browser, x::Int, w::Int)
         li == b.mark && startswith(String(line), ' ') &&
             (line = concat(styled("▶", :REPL_DocBrowser_key), line[2:end]))
         for (si, s) in enumerate(p.spots)
-            s.line == li || continue
+            s.line == li && !(s.target isa CodeTarget) || continue
             face_cols!(line, s.cols, si == b.link ? :REPL_DocBrowser_link_active : :REPL_DocBrowser_link)
             b.hover == (:spot, si) && face_cols!(line, s.cols, :REPL_DocBrowser_link_active)
             push!(b.hits, Hit(k + 2, (x + first(s.cols) - 1):(x + last(s.cols) - 1), (:spot, si)))
+        end
+        # The ⧉ of a block of code shows while the pointer or the cursor is in the block, on its
+        # first line, or on the top line of the pane when that is scrolled away.
+        start = code_block_start(p, li)
+        if start != 0 && (li == start || k == 1) && start in (b.pointer_block, cursor_block)
+            si = copy_spot(p, start)
+            if si !== nothing && startswith(String(line), ' ')
+                active = si == b.link || b.hover == (:spot, si)
+                line = concat(styled("⧉", active ? :REPL_DocBrowser_link_active : :REPL_DocBrowser_link), line[2:end])
+                push!(b.hits, Hit(k + 2, x:x, (:spot, si)))
+            end
         end
         cols = selected_cols(b, li)
         if cols !== nothing
@@ -1722,6 +1770,8 @@ function draw_doc(b::Browser, x::Int, w::Int)
             face_cols!(line, max(first(cols), indent + 1):last(cols), :REPL_DocBrowser_selection)
         end
         line = fit(line, pw)
+        # A block of code is shaded to the edge of the pane, leaving its margin out.
+        li <= length(p.lines) && is_code_line(p.lines[li]) && face_cols!(line, 3:pw, :REPL_DocBrowser_code_block)
         if li == b.doc_line && b.focus === :doc && li <= length(p.lines)
             face!(line, :REPL_DocBrowser_cursor)
             !b.color && startswith(String(line), ' ') && (line = concat("›", line[2:end]))
@@ -2177,14 +2227,16 @@ function selection_text(b::Browser)
     lines = String[]
     for li in l1:min(l2, length(p.lines))
         cols = selected_cols(b, li)::UnitRange{Int}
-        push!(lines, rstrip(col_slice(String(p.lines[li]), first(cols), last(cols))))
+        text, shift = copy_view(p, li)
+        push!(lines, rstrip(col_slice(text, max(1, first(cols) - shift), last(cols) - shift)))
     end
     # A selection that starts mid-line keeps its first line as it is. One that starts in the
     # indentation starts at the line's text.
-    first_line = l1 <= length(p.lines) ? String(p.lines[l1]) : ""
+    first_line, shift = l1 <= length(p.lines) ? copy_view(p, l1) : ("", 0)
+    c1 -= shift
     first_indent = textwidth(first_line) - textwidth(lstrip(first_line))
     if !isempty(lines) && 1 < c1 <= first_indent + 1
-        lines[1] = rstrip(col_slice(first_line, 1, last(selected_cols(b, l1)::UnitRange{Int})))
+        lines[1] = rstrip(col_slice(first_line, 1, last(selected_cols(b, l1)::UnitRange{Int}) - shift))
     end
     whole = c1 > first_indent + 1 ? (2:length(lines)) : eachindex(lines)
     indent = typemax(Int)
@@ -2197,6 +2249,14 @@ function selection_text(b::Browser)
         end
     end
     return String(strip(join(lines, '\n'), '\n'))
+end
+
+# A line of the page as it is copied, and how many columns it lost: code loses the margin
+# it is indented by on the screen, where its ⧉ goes.
+function copy_view(p::Page, li::Int)
+    text = String(p.lines[li])
+    is_code_line(p.lines[li]) || return (text, 0)
+    return (String(chop(text; head=2, tail=0)), 2)
 end
 
 # The key that makes the terminal select text itself, rather than pass the mouse on.
@@ -2266,7 +2326,7 @@ function press_doc!(b::Browser, row::Int, col::Int)
     li, col = pt
     p = page(b, current_key(b), doc_width(b))
     b.doc_line = li
-    b.link in eachindex(p.spots) && p.spots[b.link].line == li || (b.link = 0)
+    b.link in eachindex(p.spots) && p.spots[b.link].line == li || (b.link = line_link(p, li))
     text = li <= length(p.lines) ? String(p.lines[li]) : ""
     if n == 1
         b.sel = (li, col, li, col)
@@ -2384,34 +2444,39 @@ function scroll_doc!(b::Browser, delta::Int)
     b.mark = 0
 end
 
-# Move the cursor `delta` lines. The page scrolls with it as far as it can, so the cursor keeps
-# its place on the screen, and moves on the screen only where the page cannot scroll further.
+# Move the cursor `delta` lines. The page scrolls with it, so the cursor keeps its place on the
+# screen, but never closer than a few lines to the top or bottom, so what is around it shows.
+# Where the page cannot scroll further, the cursor moves on the screen instead.
 function step_doc!(b::Browser, delta::Int)
     p = page(b, current_key(b), doc_width(b))
     n = content_rows(b)
     from = max(b.doc_line, b.doc_scroll + 1)
     line = clamp(from + delta, 1, max(1, length(p.lines)))
     maxscroll = max(0, length(p.lines) - n)
-    b.doc_scroll = clamp(b.doc_scroll + line - from, max(0, line - n), min(maxscroll, line - 1))
+    margin = min(5, (n - 1) ÷ 2)
+    b.doc_scroll = clamp(clamp(b.doc_scroll + line - from, line - n + margin, line - 1 - margin), 0, maxscroll)
     b.doc_line = line
     b.mark = 0
     # The link that ⏎ follows is one on the cursor's line.
     if !(b.link in eachindex(p.spots) && p.spots[b.link].line == line)
-        b.link = something(findfirst(s -> s.line == line, p.spots), 0)
+        b.link = line_link(p, line)
     end
 end
 
 function cycle_link!(b::Browser, dir::Int)
     p = page(b, current_key(b), doc_width(b))
-    isempty(p.spots) && return (b.status = "No links on this page"; nothing)
+    # Blocks of code are not stops: the cursor on one is enough to copy it.
+    links = [i for (i, s) in enumerate(p.spots) if !(s.target isa CodeTarget)]
+    isempty(links) && return (b.status = "No links on this page"; nothing)
     n = content_rows(b)
-    if b.link == 0
+    k = findfirst(==(b.link), links)
+    if k === nothing
         # The first link from the cursor on, or back from it.
         at = max(b.doc_line, b.doc_scroll + 1)
-        i = dir > 0 ? findfirst(s -> s.line >= at, p.spots) : findlast(s -> s.line <= at, p.spots)
-        b.link = something(i, dir > 0 ? 1 : length(p.spots))
+        k = dir > 0 ? findfirst(i -> p.spots[i].line >= at, links) : findlast(i -> p.spots[i].line <= at, links)
+        b.link = links[something(k, dir > 0 ? 1 : length(links))]
     else
-        b.link = mod1(b.link + dir, length(p.spots))
+        b.link = links[mod1(k + dir, length(links))]
     end
     line = p.spots[b.link].line
     if !(b.doc_scroll < line <= b.doc_scroll + n)
@@ -2786,8 +2851,11 @@ function handle!(b::Browser, ev::KeyEvent)
             b.status = "Pick a web link with ⇥ first"
         end
     elseif isplain(ev, 'y')
-        name = current_name(b)
-        if name === nothing
+        code = pane === :doc ? code_at(b, b.doc_line) : nothing
+        name = code === nothing ? current_name(b) : code.julia ? code.code : nothing
+        if code !== nothing && !code.julia
+            b.status = "Only Julia code goes to the prompt · ⏎ copies this"
+        elseif name === nothing
             b.status = "Nothing to insert here"
         else
             b.result = name
@@ -2947,9 +3015,13 @@ function handle!(b::Browser, ev::MouseEvent)
             return click!(b, h, false)
         end
         hover = h === nothing ? nothing : h.action
+        pt = doc_point(b, ev.row, ev.col)
+        block = pt === nothing ? 0 : code_block_start(page(b, current_key(b), doc_width(b)), pt[1])
+        moved = block != b.pointer_block
+        b.pointer_block = block
         # Moving onto the card keeps it, and what it previews.
-        hover == (:card,) && return false
-        hover == b.hover && return false
+        hover == (:card,) && return moved
+        hover == b.hover && return moved
         hide_card!(b)
         b.hover = hover
         b.hover_at = (ev.row, ev.col)
@@ -3109,8 +3181,9 @@ This browser shows Julia's manual, under *Julia*, and the loaded packages, under
 
 # Leaving the browser
 
-  * `y`: close the browser and put the name being viewed at the REPL prompt.
-  * ⧉ paste at the prompt, under an example: close the browser and put the example's code at the prompt.
+  * `y`: close the browser and put the name being viewed at the REPL prompt. On a line of Julia
+    code, it puts that block of code there instead, as only its input when it is an example.
+  * ⧉, beside a block of code: copy the code, as only its input when it is an example.
   * `e`: open the source of the selected link or name, or else of the page, in your editor.
   * Right-click, `Alt`-click or `Ctrl`-click: open the source of what is under the pointer.
   * `o`: open the selected web link in your web browser.
@@ -3163,7 +3236,7 @@ address of a page of the online docs, opens there; a name such as `"sum"` or
 documentation of `x`: a module, a function, a type, or else the type of `x`. With neither,
 the browser opens where it was last closed.
 
-Returns the name or the code chosen with `y` or a paste link, or `nothing`.
+Returns the name or the code chosen with `y`, or `nothing`.
 """
 function browse(term::REPL.Terminals.TextTerminal = REPL.TerminalMenus.default_terminal();
                 query::Union{Nothing,AbstractString} = nothing, context::Module = Main)

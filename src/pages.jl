@@ -32,7 +32,9 @@ struct ToggleTarget
 end
 struct CodeTarget
     code::String
+    julia::Bool # whether it is Julia code, which can be put at the prompt
 end
+CodeTarget(code) = CodeTarget(code, true)
 struct ManualTarget
     path::String   # a page of the manual
     anchor::String # the `@id` or text of one of its headings, or "" for its top
@@ -328,8 +330,10 @@ function find_spots!(spots::Vector{Spot}, row::Int, line::AnnotatedString, ctx::
         push!(taken, cols)
         push!(spots, Spot(row, cols, target))
     end
-    # Mentions of packages, such as `Revise.jl`.
-    for m in eachmatch(r"(?<![\w.])([A-Za-z_][A-Za-z0-9_]*)\.jl\b", str)
+    # Mentions of packages, such as `Revise.jl`. Package names start with a capital letter, and
+    # in code, or after a `/`, such a name is the name of a file.
+    is_code_line(line) && return
+    for m in eachmatch(r"(?<![\w./])([A-Z][A-Za-z0-9_]*)\.jl\b", str)
         r = m.offset:(m.offset + ncodeunits(m.match) - 1)
         col = textwidth(SubString(str, 1, prevind(str, first(r)))) + 1
         cols = col:col+textwidth(m.match)-1
@@ -373,7 +377,7 @@ end
     add_markdown!(pb, md, ctx, cat; contents=false)
 
 Render `md`, making links of the names it mentions, which are looked up from module `ctx`.
-Examples get a link that pastes them at the prompt. With `contents`, a page with several
+Blocks of code get a ⧉ that copies them. With `contents`, a page with several
 headings starts with links to them.
 """
 function add_markdown!(pb::PageBuilder, md, ctx::Module, cat::Catalog; contents::Bool=false)
@@ -391,28 +395,64 @@ function add_markdown!(pb::PageBuilder, md, ctx::Module, cat::Catalog; contents:
             addline!(pb)
         end
     end
+    # The blocks of code come out in the order of the Markdown's, which says how many lines each
+    # has, so a blank line does not split one, and what language it is in.
+    nodes = md isa Markdown.MD ? code_nodes!(Markdown.Code[], md) : Markdown.Code[]
     block = String[]
+    lang = ""
+    left = 0 # lines still to come of a block whose length is known
     for line in lines
         code = is_code_line(line)
-        if !code && !isempty(block)
-            add_paste_link!(pb, block)
-            empty!(block)
+        if left == 0 && code && !isempty(nodes)
+            isempty(block) || (add_copy_mark!(pb, block, lang); empty!(block))
+            node = popfirst!(nodes)
+            left, lang = count(==('\n'), node.code) + 1, node.language
         end
-        push!(pb.lines, untab(line))
+        inblock = left > 0 || code
+        if !inblock && !isempty(block)
+            add_copy_mark!(pb, block, lang)
+            empty!(block)
+            lang = ""
+        end
+        if left > 0
+            left -= 1
+            # a blank line in the block is marked as code too, so that it is shaded with it
+            code || isempty(line) || (line = AnnotatedString(String(line), [(region=1:ncodeunits(line), label=:face, value=:markdown_code)]))
+        end
+        # Code is indented further, which leaves room for its mark in the margin.
+        push!(pb.lines, inblock ? concat("  ", untab(line)) : untab(line))
         find_spots!(pb.spots, length(pb.lines), pb.lines[end], ctx, refs, cat)
-        code && push!(block, String(line))
+        inblock && push!(block, String(line))
     end
-    isempty(block) || add_paste_link!(pb, block)
+    isempty(block) || add_copy_mark!(pb, block, lang)
 end
+
+# The blocks of code in `x`, in the order they are shown. Those that show without the face of
+# code, being empty or styled text, are left out.
+function code_nodes!(out::Vector{Markdown.Code}, x)
+    if x isa Markdown.Code
+        isempty(x.code) || x.language == "styled" || push!(out, x)
+    elseif x isa Markdown.MD || x isa Markdown.Admonition || x isa Markdown.BlockQuote
+        foreach(y -> code_nodes!(out, y), x.content)
+    elseif x isa Markdown.List
+        foreach(item -> foreach(y -> code_nodes!(out, y), item), x.items)
+    end
+    return out
+end
+
+# Julia code, as an example at the prompt or not. Documentation that names no language is
+# written in Julia, and so are Documenter's `@example` and `@repl` blocks.
+is_julia_code(lang::AbstractString) =
+    lang in ("", "julia", "julia-repl") || startswith(lang, "jldoctest") || startswith(lang, "@")
 
 is_code_line(line::AnnotatedString) =
     any(a -> a.label === :face && a.value in (:markdown_code, :markdown_julia_prompt), annotations(line))
 
 """
-    paste_text(lines) -> Union{String, Nothing}
+    paste_text(lines) -> String
 
-What to paste for a rendered code block: the input of each `julia>` prompt in an example,
-or the whole block if it is long enough to be worth it.
+What to copy or paste for a rendered code block: the input of each `julia>` prompt in an
+example, or else the whole block.
 """
 function paste_text(lines::Vector{String})
     text = String[]
@@ -437,7 +477,6 @@ function paste_text(lines::Vector{String})
         end
         return join(inputs, '\n')
     end
-    length(text) >= 3 || return nothing
     out = IOBuffer()
     for (i, t) in enumerate(text)
         i > 1 && print(out, '\n')
@@ -446,10 +485,12 @@ function paste_text(lines::Vector{String})
     return String(take!(out))
 end
 
-function add_paste_link!(pb::PageBuilder, block::Vector{String})
+# A place in the margin of the first line of a block of code that copies the code. Its ⧉ is
+# drawn only while the pointer or the cursor is in the block.
+function add_copy_mark!(pb::PageBuilder, block::Vector{String}, lang::AbstractString)
     code = paste_text(block)
-    code === nothing && return
-    addline!(pb, "  ", ("⧉ paste at the prompt", nothing, CodeTarget(code)))
+    isempty(strip(code)) && return
+    push!(pb.spots, Spot(length(pb.lines) - length(block) + 1, 1:1, CodeTarget(code, is_julia_code(lang))))
 end
 
 ## Source locations ##

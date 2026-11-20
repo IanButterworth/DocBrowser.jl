@@ -234,7 +234,7 @@ end
     frame(b)
     # Step through the links and follow the first one.
     handle!(b, KeyEvent(:tab))
-    @test b.link == 1
+    @test b.link > 0
     handle!(b, KeyEvent(:enter))
     @test DocBrowser.current_key(b).name === :documented_public
     handle!(b, KeyEvent(:backspace))
@@ -524,7 +524,7 @@ area(s::Square) = s.side^2
 
     @test DocBrowser.paste_text(["  julia> x = 1", "  1", "", "  julia> f(x,", "             y)"]) ==
         "x = 1\nf(x,\n    y)"
-    @test DocBrowser.paste_text(["  sum(x)"]) === nothing
+    @test DocBrowser.paste_text(["  sum(x)"]) == "sum(x)"
     @test DocBrowser.licence(pkgdir(DocBrowser)) == "MIT"
     @test DocBrowser.licence(mktempdir()) === nothing
 end
@@ -571,10 +571,6 @@ end
     @test length(DocBrowser.layout(b)) == 1
     handle!(b, KeyEvent('w'))
     @test b.layout === :auto
-
-    # A paste link returns its code.
-    DocBrowser.follow!(b, DocBrowser.CodeTarget("1 + 1"))
-    @test b.quit && b.result == "1 + 1"
 end
 
 @testset "browse objects, reopening, no colour" begin
@@ -788,6 +784,78 @@ end
     @test DocBrowser.word_cols("see Base.sort!.", 6) == 5:14
     @test DocBrowser.word_cols("a  b", 2) === nothing
     @test DocBrowser.col_slice("αβγδ", 2, 3) == "βγ"
+end
+
+@testset "copying code" begin
+    b = test_browser()
+    DocBrowser.follow!(b, NameTarget(@__MODULE__, :Shape))
+    frame(b)
+    p = DocBrowser.page(b, DocBrowser.current_key(b), DocBrowser.doc_width(b))
+    # The example is indented, and has no line of its own to copy it.
+    k = findfirst(l -> occursin("julia> 1 + 1", String(l)), p.lines)
+    @test startswith(String(p.lines[k]), "    julia>") && startswith(String(p.lines[k+1]), "    2")
+    @test !any(l -> occursin("paste at the prompt", String(l)), p.lines)
+    # Its ⧉ shows only while the pointer or the cursor is in it.
+    x = only(l[2] for l in DocBrowser.layout(b) if l[1] === :doc)
+    row = k - b.doc_scroll + 2
+    copy_mark() = any(l -> DocBrowser.col_slice(strip_ansi(l), x, x) == "⧉", frame(b))
+    @test !copy_mark()
+    handle!(b, MouseEvent(:move, 0, row + 1, x + 6, 0))
+    @test copy_mark()
+    handle!(b, MouseEvent(:move, 0, 1, 1, 0))
+    @test !copy_mark()
+    # With the cursor in it, ⏎ copies the code and stays, and y puts it at the prompt.
+    b.focus = :doc
+    b.doc_line = k
+    press!(b, :down)
+    @test copy_mark() && occursin("⏎ copy code", strip_ansi(frame(b)[end]))
+    press!(b, :enter)
+    @test COPIED[end] == "1 + 1" && !b.quit && occursin("Copied 1 line of code", b.status)
+    press!(b, 'y')
+    @test b.quit && b.result == "1 + 1"
+
+    # Every block can be copied, whole across blank lines; only Julia goes to the prompt.
+    pb = DocBrowser.PageBuilder(60)
+    DocBrowser.add_markdown!(pb, Markdown.parse("""
+        ```toml
+        [deps]
+
+        Foo = "1"
+        ```
+
+        ```jldoctest
+        julia> 1 + 1
+        2
+
+        julia> 2 + 2
+        4
+        ```
+        """), Main, b.cat)
+    codes = [s.target for s in pb.spots if s.target isa DocBrowser.CodeTarget]
+    @test codes == [DocBrowser.CodeTarget("[deps]\n\nFoo = \"1\"", false), DocBrowser.CodeTarget("1 + 1\n2 + 2", true)]
+    @test all(DocBrowser.is_code_line, pb.lines[1:3])
+    # A file named in code, in lower case or in a path is not taken for a package.
+    pb = DocBrowser.PageBuilder(60)
+    DocBrowser.add_markdown!(pb, Markdown.parse("""
+        ```
+        \$ julia Script.jl
+        ```
+
+        Run `julia script.jl`, or src/Foo.jl, with NotAPackageXyz.jl.
+        """), Main, b.cat)
+    @test [s.target for s in pb.spots if s.target isa DocBrowser.URLTarget] == [DocBrowser.web_search("NotAPackageXyz")]
+    # y on code that is not Julia says so, and stays.
+    path = tempname() * ".md"
+    write(path, "# Settings\n\n```toml\nx = 1\n```\n")
+    b = test_browser()
+    DocBrowser.follow!(b, DocBrowser.ManualTarget(path, ""))
+    frame(b)
+    p = DocBrowser.page(b, DocBrowser.current_key(b), DocBrowser.doc_width(b))
+    b.focus = :doc
+    b.doc_line = findfirst(l -> occursin("x = 1", String(l)), p.lines)
+    @test !occursin("y send", strip_ansi(frame(b)[end]))
+    press!(b, 'y')
+    @test !b.quit && occursin("Only Julia code", b.status)
 end
 
 @testset "the manual" begin
@@ -1467,15 +1535,18 @@ end
     press!(b, ' ');       @test b.doc_scroll > 0
     press!(b, :home);     @test b.doc_scroll == 0
     press!(b, :end);      @test b.doc_scroll > 0
-    press!(b, 'g', 'j');  @test b.doc_scroll == 1
-    press!(b, 'k');       @test b.doc_scroll == 0
+    press!(b, 'g', 'j');  @test b.doc_scroll == 0 && b.doc_line == 2
+    press!(b, 'k');       @test b.doc_line == 1
     press!(b, 'o');       @test occursin("web link", b.status)
     press!(b, :enter);    @test occursin("No link on this line", b.status)
-    # The cursor keeps its row while the page scrolls, and moves where the page cannot scroll.
-    press!(b, 'j', 'j');  @test b.doc_scroll == 2 && b.doc_line == 3
+    # The cursor moves down five rows before the page scrolls, which keeps five lines above it.
+    press!(b, 'j', 'j', 'j', 'j', 'j'); @test b.doc_scroll == 0 && b.doc_line == 6
+    press!(b, 'j');       @test b.doc_scroll == 1 && b.doc_line == 7
+    press!(b, 'k');       @test b.doc_scroll == 0 && b.doc_line == 6
+    # At the end of the page, where it cannot scroll, the cursor moves on to the last line.
     nlines = length(DocBrowser.page(b, DocBrowser.current_key(b), DocBrowser.doc_width(b)).lines)
     press!(b, 'G');       @test b.doc_line == nlines
-    press!(b, 'k');       @test b.doc_line == nlines - 1 == b.doc_scroll + DocBrowser.content_rows(b)
+    press!(b, 'k');       @test b.doc_line == nlines - 1 == b.doc_scroll + DocBrowser.content_rows(b) - 1
     press!(b, 'g');       @test b.doc_line == 1 && b.doc_scroll == 0
     # ⇥ puts the cursor on the link it picks, and the cursor picks a link on its line.
     press!(b, :tab);      line = b.doc_line; @test b.link > 0
