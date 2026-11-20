@@ -75,6 +75,22 @@ module UndocumentedExt end
 
 strip_ansi(s) = replace(s, r"\e\[[0-9;?]*[a-zA-Z]|\e\]8;[^\e]*\e\\\\" => "")
 
+# Input over a slow connection: each part arrives only once the reader waits for more.
+mutable struct SlowInput <: IO
+    buf::IOBuffer
+    parts::Vector{String}
+end
+SlowInput(first::String, rest::String...) = SlowInput(IOBuffer(first), collect(rest))
+Base.bytesavailable(s::SlowInput) = bytesavailable(s.buf)
+function Base.eof(s::SlowInput)
+    eof(s.buf) || return false
+    isempty(s.parts) && return true
+    s.buf = IOBuffer(popfirst!(s.parts))
+    return false
+end
+Base.read(s::SlowInput, ::Type{UInt8}) = (eof(s) && throw(EOFError()); read(s.buf, UInt8))
+Base.peek(s::SlowInput, ::Type{UInt8}) = (eof(s) && throw(EOFError()); peek(s.buf, UInt8))
+
 @testset "input decoding" begin
     ev(s) = read_event(IOBuffer(s))
     @test ev("q") == KeyEvent('q')
@@ -116,13 +132,9 @@ strip_ansi(s) = replace(s, r"\e\[[0-9;?]*[a-zA-Z]|\e\]8;[^\e]*\e\\\\" => "")
     io = IOBuffer("\e]11;rgb")
     @test read_event(io) === nothing && eof(io)
     # A sequence split across two reads, as over a slow connection, is still one key. The rest
-    # is written once the reader waits for it; a fixed delay was flaky on Windows.
-    p = Pipe(); Base.link_pipe!(p)
-    write(p, "\e")
-    Base.wait_readnb(p.out, 1)
-    t = @async write(p, "[A")
-    @test read_event(p.out) == KeyEvent(:up)
-    wait(t); close(p)
+    # arrives when the reader waits for it, as writing it from another task did not reliably.
+    @test read_event(SlowInput("\e", "[A")) == KeyEvent(:up)
+    @test read_event(SlowInput("\e[", "A")) == KeyEvent(:up)
     # After a click closes the browser, its release is read rather than left for the prompt.
     io = IOBuffer("\e[<35;3;4M\e[<0;79;26mabc")
     DocBrowser.await_release(io)
