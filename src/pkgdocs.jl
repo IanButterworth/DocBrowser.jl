@@ -114,7 +114,7 @@ function add_doc_pages!(out, list::Expr, group::String)
         if x isa String
             push!(out, (x, "", group))
         elseif Meta.isexpr(x, :call, 3) && x.args[1] === :(=>) && x.args[2] isa String
-            title, v = x.args[2], x.args[3]
+            title, v = x.args[2]::String, x.args[3]
             if v isa String
                 push!(out, (v, title, group))
             elseif is_list(v)
@@ -203,8 +203,9 @@ function autodocs_names(code::AbstractString, ctx::Module, cat::Catalog)
             (e.vis === :internal ? private : public) || continue
             if !isempty(pages)
                 docs = get(meta, Base.Docs.Binding(m, e.name), nothing)
-                docs === nothing && continue
-                any(d -> any(p -> endswith(string(get(d.data, :path, "")), p), pages), values(docs.docs)) || continue
+                docs isa Base.Docs.MultiDoc || continue
+                any(d -> d isa DocStr && any(p -> endswith(as_string(string(get(d.data, :path, ""))), p), pages),
+                    values(docs.docs)) || continue
             end
             push!(picked, e)
         end

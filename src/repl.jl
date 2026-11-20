@@ -55,7 +55,7 @@ function open_from_prompt(s::LineEdit.MIState, julia_prompt::LineEdit.Prompt)
 end
 
 # The prompt of a mode, as plain text.
-prompt_text(m) = m isa LineEdit.Prompt ? LineEdit.prompt_string(m.prompt) : ""
+prompt_text(m) = m isa LineEdit.Prompt ? as_string(LineEdit.prompt_string(m.prompt)) : ""
 
 const INSTALLED = WeakKeyDict{Any,Nothing}()
 

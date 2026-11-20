@@ -9,10 +9,12 @@ struct NameTarget
 end
 struct URLTarget
     url::String
+    URLTarget(url) = new(as_string(url))
 end
 struct SourceTarget
     file::String
     line::Int
+    SourceTarget(file, line::Int) = new(as_string(file), line)
 end
 struct SectionTarget
     role::Symbol
@@ -34,6 +36,7 @@ end
 struct ManualTarget
     path::String   # a page of the manual
     anchor::String # the `@id` or text of one of its headings, or "" for its top
+    ManualTarget(path, anchor) = new(as_string(path), as_string(anchor))
 end
 
 const Target = Union{ModuleTarget,NameTarget,URLTarget,SourceTarget,SectionTarget,LoadTarget,
@@ -93,8 +96,35 @@ end
 untab(s::AnnotatedString{String}) =
     '\t' in String(s) ? AnnotatedString(replace(String(s), '\t' => ' '), annotations(s)) : s
 
+const Annotations = typeof(annotations(AnnotatedString("")))
+
+# The parts joined into one annotated string. `annotatedstring` does the same for any
+# arguments, but packages that add string types invalidate its compiled code, and with it
+# the code that draws every row.
+function concat(parts...)
+    io = IOBuffer()
+    anns = Annotations()
+    for p in parts
+        off = position(io)
+        p isa SubString{AnnotatedString{String}} && (p = AnnotatedString(p))
+        if p isa AnnotatedString{String}
+            write(io, p.string)
+            for a in annotations(p)
+                push!(anns, (region=a.region .+ off, label=a.label, value=a.value))
+            end
+        elseif p isa String
+            write(io, p)
+        else
+            write(io, String(p)::String)
+        end
+    end
+    return AnnotatedString(String(take!(io)), anns)
+end
+
 function styled(text, face)
-    s = untab(AnnotatedString(text isa AnnotatedString ? text : String(text)))
+    str = text isa AnnotatedString{String} || text isa SubString{AnnotatedString{String}} ?
+        AnnotatedString(text) : AnnotatedString(as_string(text))
+    s = untab(str)
     isempty(s) || face === nothing || face!(s, face)
     return s
 end
@@ -115,7 +145,7 @@ function addline!(pb::PageBuilder, segs...)
         col += w
         push!(parts, s)
     end
-    push!(pb.lines, isempty(parts) ? AnnotatedString("") : annotatedstring(parts...))
+    push!(pb.lines, isempty(parts) ? AnnotatedString("") : concat(parts...))
     return pb
 end
 
@@ -205,7 +235,7 @@ function walk_md(f, @nospecialize(x))
     end
 end
 
-md_text(x::AbstractString) = x
+md_text(x::AbstractString) = as_string(x)
 md_text(x::Markdown.Code) = x.code
 md_text(x::Markdown.LaTeX) = x.formula
 md_text(x::AbstractVector) = join(map(md_text, x))
@@ -221,7 +251,7 @@ function ref_targets(md)
     walk_md(md) do x
         x isa Markdown.Link || return
         startswith(x.url, "@ref") || return
-        text = strip(replace(md_text(x.text), r"\s+" => ' '))
+        text = strip(replace(md_text(x.text)::String, r"\s+" => ' '))
         target = strip(chopprefix(x.url, "@ref"), [' ', '`'])
         refs[text] = isempty(target) ? text : target
     end
@@ -283,7 +313,7 @@ function find_spots!(spots::Vector{Spot}, row::Int, line::AnnotatedString, ctx::
         r = first(ann.region):thisind(str, last(ann.region))
         isempty(r) && continue
         target = if ann.label === :link && ann.value isa AbstractString
-            url = String(ann.value)
+            url = as_string(ann.value)
             # an `@ref` that leads nowhere the browser knows
             startswith(url, '@') ? nothing :
                 is_manual_link(url) ? manual_target(url) : something(pkgdocs_target(url), URLTarget(url))
@@ -428,7 +458,7 @@ function source_target(d::DocStr)
     path = get(d.data, :path, nothing)
     line = get(d.data, :linenumber, 0)
     path isa AbstractString && !isempty(path) || return nothing
-    return SourceTarget(source_path(path), line isa Integer ? Int(line) : 0)
+    return SourceTarget(source_path(path), line isa Int ? line : 0)
 end
 
 function source_path(path::AbstractString)
@@ -452,10 +482,14 @@ const MAX_LISTED = 100
 
 List methods `ms` by signature. Each links to its definition.
 """
+# The Markdown of each docstring. Packages add their own ways to format docstrings.
+parse_docs(results::Vector{DocStr}) = Any[dynamic(REPL.parsedoc)(d) for d in results]
+
 function add_methods!(pb::PageBuilder, title::String, ms)
     isempty(ms) && return
     heading!(pb, string(title, " (", length(ms), ")"))
-    for m in Iterators.take(ms, MAX_LISTED)
+    for (i, m) in enumerate(ms)
+        i > MAX_LISTED && break
         sig = String(first(split(sprint(show, m; context = :compact => true), " @ "; limit=2)))
         t = method_target(m)
         addline!(pb, "    ", (sig, nothing, t), ("  " * basename(source_label(t)), :REPL_DocBrowser_dim))
@@ -521,7 +555,7 @@ function add_type_info!(pb::PageBuilder, @nospecialize(T), flags::Set{Symbol})
     end
     add_supertypes!(pb, T)
     if D isa DataType && isabstracttype(D)
-        subs = @attempt InteractiveUtils.subtypes(T) Any[]
+        subs = @attempt dynamic(InteractiveUtils.subtypes)(T)::Vector{Any} Any[]
         if !isempty(subs)
             heading!(pb, "Subtypes ($(length(subs)))")
             segs = Any[]
@@ -577,7 +611,7 @@ function entry_page(cat::Catalog, e::NameEntry, width::Int, flags::Set{Symbol}=S
     end
     rule!(pb)
     b = Binding(e.mod, e.name)
-    md = isempty(results) ? REPL.doc(b) : Base.Docs.catdoc(map(REPL.parsedoc, results)...)
+    md = isempty(results) ? dynamic(REPL.doc)(b) : dynamic(Base.Docs.catdoc)(parse_docs(results)...)
     trimmed = false
     if md isa Markdown.MD
         brief, trimmed = REPL._trimdocs(md, true)
@@ -650,7 +684,9 @@ function registry_repo(id::PkgId)
             d === nothing && continue
             entry = get(get(d, "packages", Dict()), string(id.uuid), nothing)
             entry isa AbstractDict || continue
-            info = read_project(joinpath(reg, get(entry, "path", ""), "Package.toml"))
+            path = get(entry, "path", "")
+            path isa AbstractString || continue
+            info = read_project(joinpath(reg, as_string(path), "Package.toml"))
             url = info === nothing ? nothing : get(info, "repo", nothing)
             url isa String && return url
         end
@@ -720,7 +756,7 @@ function jll_licence_dir(id::PkgId)
     lib = chopsuffix(id.name, "_jll")
     root = Base.root_module_exists(id) ? Base.root_module(id) : nothing
     if root !== nothing && isdefined(root, :artifact_dir)
-        dir = joinpath(string(getglobal(root, :artifact_dir)), "share", "licenses", lib)
+        dir = joinpath(as_string(string(getglobal(root, :artifact_dir))), "share", "licenses", lib)
         isdir(dir) && return dir
     end
     return joinpath(dirname(Sys.BINDIR), "share", "licenses", lib)
@@ -812,7 +848,7 @@ end
 function online_docs(id::PkgId, dir)
     isjll(id.name) && return nothing
     url = docs_url(dir)
-    url === nothing && Base.is_stdlib(id) && return julia_docs("stdlib/$(id.name)/")
+    url === nothing && is_stdlib(id) && return julia_docs("stdlib/$(id.name)/")
     return url
 end
 
@@ -840,7 +876,7 @@ function role_line(cat::Catalog, m::Module)
     else
         push!(segs, ("indirect dependency", dim))
     end
-    Base.is_stdlib(p.id) && p.role in (:direct, :indirect) && push!(segs, (" · standard library", dim))
+    is_stdlib(p.id) && p.role in (:direct, :indirect) && push!(segs, (" · standard library", dim))
     if !isempty(p.via) && p.role === :indirect
         push!(segs, (" · loaded by ", dim))
         for (i, name) in enumerate(p.via)
@@ -899,7 +935,7 @@ function module_page(cat::Catalog, m::Module, width::Int)
     rule!(pb)
     results = doc_results(module_binding(m))
     if !isempty(results)
-        md = Base.Docs.catdoc(map(REPL.parsedoc, results)...)
+        md = dynamic(Base.Docs.catdoc)(parse_docs(results)...)
     elseif ext
         md = Markdown.parse("No docstring found for `$(display_name(m))`.")
     else
@@ -938,9 +974,13 @@ function module_page(cat::Catalog, m::Module, width::Int)
     return Page(pb, isempty(sources) ? nothing : first(sources))
 end
 
+# Markdown has no HTML blocks before Julia 1.14. Checking for the name as the code runs would
+# make the code depend on that name, which loading other packages can invalidate.
+const HTML_BLOCK = isdefined(Markdown, :HTMLBlock) ? getglobal(Markdown, :HTMLBlock) : Union{}
+
 is_badge(x) = x isa Markdown.Image || x isa Markdown.LineBreak ||
     (x isa AbstractString && isempty(strip(x))) ||
-    (x isa Markdown.Link && all(is_badge, x.text))
+    (x isa Markdown.Link && dynamic(all)(is_badge, x.text)::Bool)
 
 """
     strip_badges!(md) -> md
@@ -950,11 +990,11 @@ badges and logos, which show up as clutter in a terminal.
 """
 function strip_badges!(md::Markdown.MD)
     filter!(md.content) do x
-        isdefined(Markdown, :HTMLBlock) && x isa Markdown.HTMLBlock && return false
+        x isa HTML_BLOCK && return false
         # before Julia 1.14 an HTML block is read as a paragraph of its text
         x isa Markdown.Paragraph && length(x.content) == 1 && x.content[1] isa AbstractString &&
             occursin(r"\A\s*<[a-zA-Z/!].*>\s*\z"s, x.content[1]) && return false
-        x isa Markdown.Paragraph && !isempty(x.content) && all(is_badge, x.content) && return false
+        x isa Markdown.Paragraph && !isempty(x.content) && dynamic(all)(is_badge, x.content)::Bool && return false
         return true
     end
     return md
@@ -982,7 +1022,7 @@ function jll_markdown(m::Module, p::PkgEntry)
         val = getglobal(m, n)
         pathname = Symbol(n, "_path")
         path = isdefined(m, pathname) ? getglobal(m, pathname) : nothing
-        where = path isa AbstractString && !isempty(path) ? ", at `$(Base.contractuser(path))`" : ""
+        where = path isa AbstractString && !isempty(path) ? ", at `$(Base.contractuser(as_string(path)))`" : ""
         if val isa Function
             push!(exes, "  * `$n()`: a command that runs `$n`$where.")
         else
@@ -1102,7 +1142,7 @@ end
 
 function unloaded_page(cat::Catalog, id::PkgId, width::Int, then::String="")
     pb = PageBuilder(width)
-    stdlib = Base.is_stdlib(id)
+    stdlib = is_stdlib(id)
     dir = unloaded_dir(id)
     addline!(pb)
     addline!(pb, "  ", (isempty(then) ? id.name : then, :REPL_DocBrowser_title))

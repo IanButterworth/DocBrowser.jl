@@ -22,7 +22,7 @@ function manual_pages(dir::String=manual_dir())
     d = @attempt Base.parsed_toml(toml) return pages
     for (key, role) in (("manual", :manual), ("base", :basedocs))
         for rel in get(d, key, String[])
-            add_manual_page!(pages, joinpath(dir, rel), role, "")
+            rel isa AbstractString && add_manual_page!(pages, joinpath(dir, as_string(rel)), role, "")
         end
     end
     # The standard libraries ship their manual pages with their source.
@@ -35,13 +35,13 @@ function manual_pages(dir::String=manual_dir())
     solvers = joinpath(Sys.STDLIB, "SparseArrays", "docs", "src", "solvers.md")
     isfile(solvers) && add_manual_page!(stdlibs, solvers, :stdlibdocs, "")
     append!(pages, sort_by!(stdlibs, p -> lowercase(p.title)))
-    for file in pkg_doc_files()
+    for file in pkg_doc_files()::Vector{String}
         add_manual_page!(pages, joinpath(pkg_docs_dir(), file), :pkgdocs, "")
     end
     for g in get(d, "devdocs", Any[])
         g isa AbstractDict || continue
         for rel in get(g, "pages", String[])
-            add_manual_page!(pages, joinpath(dir, rel), :devdocs, String(get(g, "title", "")))
+            rel isa AbstractString && add_manual_page!(pages, joinpath(dir, as_string(rel)), :devdocs, as_string(get(g, "title", "")))
         end
     end
     return pages
@@ -60,7 +60,7 @@ function pkg_doc_files()
     dir = pkg_docs_dir()
     isdir(dir) || return String[]
     make = joinpath(dir, "..", "make.jl")
-    listed = isfile(make) ? [m[1] for m in eachmatch(r"\"([\w-]+\.md)\"", read(make, String))] : String[]
+    listed = isfile(make) ? String[String(m[1]::SubString{String}) for m in eachmatch(r"\"([\w-]+\.md)\"", read(make, String))] : String[]
     # Some pages are made by the build, so are not installed.
     files = filter(f -> isfile(joinpath(dir, f)), listed)
     isempty(files) || return files
@@ -152,7 +152,8 @@ function page_ref(path::String)
 end
 
 # A link to Pkg's online manual, as the page that is installed.
-function pkgdocs_target(url::AbstractString)
+pkgdocs_target(url::AbstractString) = pkgdocs_target(String(url)::String)
+function pkgdocs_target(url::String)
     m = match(r"^https?://pkgdocs\.julialang\.org/[^/#]+/?(?:([\w-]+)/?)?(?:#(.*))?$", url)
     m === nothing && return nothing
     path = normpath(pkg_docs_dir(), something(m[1], "index") * ".md")
@@ -236,11 +237,12 @@ function page_headings(cat::Catalog, path::String)
         walk_md(md) do x
             x isa Markdown.Header || return
             text, id = x.text, ""
-            if length(text) == 1 && text[1] isa Markdown.Link && startswith(text[1].url, "@id")
-                id = String(strip(chopprefix(text[1].url, "@id")))
-                text = text[1].text
+            link = length(text) == 1 ? text[1] : nothing
+            if link isa Markdown.Link && startswith(link.url, "@id")
+                id = String(strip(chopprefix(link.url, "@id")))
+                text = link.text
             end
-            t = String(strip(replace(md_text(text), r"\s+" => ' ')))
+            t = String(strip(replace(md_text(text)::String, r"\s+" => ' ')))
             any(c -> isletter(c) || isdigit(c), t) && push!(headings, Heading(heading_level(x), t, id, 0))
         end
         headings
@@ -291,7 +293,18 @@ function anchor_heading(cat::Catalog, path::String, anchor::String)
     return 0
 end
 
-manual_page_of(cat::Catalog, path::String) = findfirst(p -> p.path == normpath(path), cat.manual)
+# The place of the page in the manual. The sidebar asks for it for each row it draws.
+function manual_page_of(cat::Catalog, path::String)
+    pages, index = cat.manual_index
+    if pages !== cat.manual
+        index = Dict{String,Int}()
+        for (i, p) in enumerate(cat.manual)
+            get!(index, p.path, i)
+        end
+        cat.manual_index = (cat.manual, index)
+    end
+    return something(get(index, path, nothing), get(index, normpath(path), nothing), Some(nothing))
+end
 
 # The first page of a package's Documenter manual, which standard libraries and many packages
 # ship with their source.
@@ -323,7 +336,8 @@ manual_url(path::AbstractString, anchor::AbstractString="") = string(MANUAL_LINK
 
 # The page and anchor of a link to a Markdown file, or `nothing`. The anchor follows the last
 # `#`, as a path may have one too.
-function manual_target(url::AbstractString)
+manual_target(url::AbstractString) = manual_target(as_string(url))
+function manual_target(url::String)
     startswith(url, MANUAL_LINK) || return nothing
     s = chopprefix(url, MANUAL_LINK)
     endswith(s, ".md") && return ManualTarget(String(s), "")
@@ -374,8 +388,9 @@ function documenter_blocks(blocks::Vector, ctx::Module=Main, cat::Union{Nothing,
                 isempty(items) || push!(out, Markdown.List(items, -1, false))
             end
         elseif x isa Markdown.Header
-            if length(x.text) == 1 && x.text[1] isa Markdown.Link && startswith(x.text[1].url, "@id")
-                x.text = x.text[1].text
+            link = length(x.text) == 1 ? x.text[1] : nothing
+            if link isa Markdown.Link && startswith(link.url, "@id")
+                x.text = link.text
             end
             push!(out, x)
         elseif x isa Markdown.Admonition
@@ -392,7 +407,7 @@ function manual_link(link::Markdown.Link, path::String, ctx::Module, cat::Catalo
     url = link.url
     if startswith(url, "@ref")
         target = strip(strip(chopprefix(url, "@ref")), '"')
-        key = String(isempty(target) ? strip(replace(md_text(link.text), r"\s+" => ' ')) : target)
+        key = String(isempty(target) ? strip(replace(md_text(link.text)::String, r"\s+" => ' ')) : target)
         # As in Documenter, a link written as code names a docstring, and one in words a heading.
         code = length(link.text) == 1 && link.text[1] isa Markdown.Code
         anchors = manual_anchors(cat)
@@ -482,8 +497,11 @@ function search_manual(cat::Catalog, query::AbstractString; text::Bool=false, li
     isempty(q) && return hits
     if text
         words = split(q)
-        for (path, heading, body) in manual_sections(cat)
-            all(w -> occursin(w, body), words) || continue
+        sections = manual_sections(cat)
+        found = find_matches(i -> all(w -> occursin(w, sections[i][3]), words), cat.section_matches,
+                             sections, join(words, ' '), words_narrow)
+        for i in found
+            path, heading, body = sections[i]
             score = sum(w -> count(w, body), words) + (occursin(q, body) ? 50 : 0)
             push!(hits, ManualHit(path, heading, score))
         end
@@ -511,7 +529,7 @@ function manual_sections(cat::Catalog)
     for p in cat.manual
         lines = readlines(p.path)
         hs = index_headings(cat, p.path)
-        starts = [1; Int[h.line for h in hs]]
+        starts = pushfirst!(Int[h.line for h in hs], 1)
         for k in 0:length(hs)
             stop = k < length(hs) ? starts[k+2] - 1 : length(lines)
             body = lowercase(join(view(lines, starts[k+1]:stop), ' '))

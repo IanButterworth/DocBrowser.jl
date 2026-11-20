@@ -137,6 +137,8 @@ mutable struct Browser
     theme::Union{Nothing,Symbol}
     bg::Union{Nothing,UInt32}
     faces::Vector{Pair{Symbol,Face}}
+    # the rows of each section of the sidebar, for the catalog and manual they were found in
+    sections::Tuple{Any,Any,Dict{Symbol,Vector{SideRow}}}
 end
 
 function Browser(term::REPL.Terminals.TextTerminal, cat::Catalog=Catalog())
@@ -150,7 +152,8 @@ function Browser(term::REPL.Terminals.TextTerminal, cat::Catalog=Catalog())
                 get(term.out_stream, :color, true)::Bool || REPL.Terminals.hascolor(term),
                 nothing, false, (0.0, 0.0, 0.0, 0.0), nothing, ManualHit[], 0, NameEntry[], Tuple{String,PkgId}[], SEARCH_INDIRECT[], 0, (0, 0), Inf, nothing,
                 tip_order(), 1, false, nothing, nothing, "", nothing, nothing, "", Base.get_world_counter(),
-                0, "", terminal_theme(), nothing, browser_faces(terminal_theme(), nothing))
+                0, "", terminal_theme(), nothing, browser_faces(terminal_theme(), nothing),
+                (nothing, nothing, Dict{Symbol,Vector{SideRow}}()))
     any(p -> p.role in (:project, :direct), cat.pkgs) || push!(b.expanded, :indirect)
     refresh_side!(b)
     b.side.cursor = 1 # the start page
@@ -189,20 +192,31 @@ end
 function stdlib_package(b::Browser, page::ManualPage)
     page.role in (:stdlibdocs, :pkgdocs) || return nothing
     name = page.role === :pkgdocs ? "Pkg" : stdlib_name(page.path)
-    i = findfirst(p -> p.id.name == name && p.role !== :extension && Base.is_stdlib(p.id), b.cat.pkgs)
+    i = findfirst(p -> p.id.name == name && p.role !== :extension && is_stdlib(p.id), b.cat.pkgs)
     return i === nothing ? nothing : b.cat.pkgs[i]
 end
 
 # The section whose row for package `p` it is picked by.
 function package_section(p::PkgEntry)
     p.role === :julia && return :basedocs
-    p.role === :indirect && Base.is_stdlib(p.id) &&
+    p.role === :indirect && is_stdlib(p.id) &&
         (p.id.name == "Pkg" || stdlib_page(p.id.name) !== nothing) && return :stdlibdocs
     return p.role
 end
 
-# The rows of section `role`, when it is unfolded.
+# The rows of section `role`, when it is unfolded. The sidebar asks for them several times for
+# each row it draws, so they are kept until the sidebar is refreshed, or the catalog or its
+# manual changes.
 function section_rows(b::Browser, role::Symbol)
+    cat, manual, rows = b.sections
+    if cat !== b.cat || manual !== b.cat.manual
+        rows = Dict{Symbol,Vector{SideRow}}()
+        b.sections = (b.cat, b.cat.manual, rows)
+    end
+    return get!(() -> build_section_rows(b, role), rows, role)
+end
+
+function build_section_rows(b::Browser, role::Symbol)
     rows = SideRow[]
     if role === :basedocs
         for p in b.cat.pkgs
@@ -239,6 +253,7 @@ function section_rows(b::Browser, role::Symbol)
 end
 
 function refresh_side!(b::Browser)
+    b.sections = (nothing, nothing, Dict{Symbol,Vector{SideRow}}())
     selected = row_key(side_row(b))
     rows = SideRow[SideRow(:start, nothing)]
     for (block, roles) in pairs(BLOCKS)
@@ -532,7 +547,7 @@ end
 function close_search!(b::Browser)
     b.query = nothing
     b.typing = false
-    empty!(b.results)
+    b.results = NameEntry[] # the list may be one that the catalog keeps
     empty!(b.manual_hits)
     b.hidden = 0
     refresh_names!(b)
@@ -738,13 +753,13 @@ function load_package!(b::Browser, id::PkgId; then::String="")
     b.console = ["julia> import " * id.name]
     start = current_key(b)
     # Loading prints nothing while it precompiles, which can take minutes, so say so.
-    precompiled = Base.isprecompiled(id)
+    precompiled = dynamic(Base.isprecompiled)(id)::Bool
     what = Ref((precompiled ? "Loading " : "Precompiling ") * id.name)
     function load()
         # Precompiling first, as the import would, runs in other processes, and the browser
         # keeps working meanwhile. Without this internal function the import does it.
         precompiled || try
-            Base.Precompilation.precompilepkgs([id]; _from_loading=true, ignore_loaded=false)
+            dynamic(Base.Precompilation.precompilepkgs)([id]; _from_loading=true, ignore_loaded=false)
         catch err
             err isa MethodError || rethrow()
         end
@@ -1018,7 +1033,7 @@ function fit(s::AnnotatedString{String}, w::Int)
         s = AnnotatedString(str, annotations(s))
     end
     total = textwidth(str)
-    total <= w && return annotatedstring(s, ' '^(w - total))
+    total <= w && return concat(s, ' '^(w - total))
     used = 0
     last = 0
     for (i, c) in pairs(str)
@@ -1028,13 +1043,13 @@ function fit(s::AnnotatedString{String}, w::Int)
         last = i
     end
     head = last == 0 ? AnnotatedString("") : s[1:last]
-    return annotatedstring(head, styled("…", :REPL_DocBrowser_dim), ' '^(w - 1 - used))
+    return concat(head, styled("…", :REPL_DocBrowser_dim), ' '^(w - 1 - used))
 end
 fit(s::AbstractString, w::Int) = fit(AnnotatedString(String(s)), w)
 
 # `s` with `face` beneath the faces it already has.
 under_face(s::AnnotatedString{String}, face::Symbol) =
-    AnnotatedString(String(s), [(region=1:ncodeunits(s), label=:face, value=face); annotations(s)])
+    AnnotatedString(String(s), pushfirst!(copy(annotations(s)), (region=1:ncodeunits(s), label=:face, value=face)))
 
 # Apply `face` to the display columns `cols` of `s`.
 function face_cols!(s::AnnotatedString, cols::UnitRange{Int}, face)
@@ -1081,7 +1096,7 @@ function put_seg!(rb::RowBuilder, text, face=nothing, action=nothing)
 end
 
 width(rb::RowBuilder) = sum(p -> textwidth(String(p)), rb.parts; init=0)
-build(rb::RowBuilder) = isempty(rb.parts) ? AnnotatedString("") : annotatedstring(rb.parts...)
+build(rb::RowBuilder) = isempty(rb.parts) ? AnnotatedString("") : concat(rb.parts...)
 
 function hint_segments(b::Browser)
     narrow = b.width < 100 ? [("w", "layout")] : Tuple{String,String}[]
@@ -1522,7 +1537,7 @@ function list_line(b::Browser, pane::Symbol, i::Int, x::Int, w::Int, row::Int)
         end
         # Without colour the selection would not show, so mark it.
         if !b.color && startswith(String(line), ' ')
-            line = annotatedstring(b.focus === pane ? "▶" : "›", line[2:end])
+            line = concat(b.focus === pane ? "▶" : "›", line[2:end])
         end
     end
     return line
@@ -1642,7 +1657,7 @@ function draw_doc(b::Browser, x::Int, w::Int)
         line = li <= length(p.lines) ? copy_line(p.lines[li]) : AnnotatedString("")
         b.searchmode !== :names && b.query !== nothing && mark_words!(line, b.query)
         li == b.mark && startswith(String(line), ' ') &&
-            (line = annotatedstring(styled("▶", :REPL_DocBrowser_key), line[2:end]))
+            (line = concat(styled("▶", :REPL_DocBrowser_key), line[2:end]))
         for (si, s) in enumerate(p.spots)
             s.line == li || continue
             face_cols!(line, s.cols, si == b.link ? :REPL_DocBrowser_link_active : :REPL_DocBrowser_link)
@@ -1660,7 +1675,7 @@ function draw_doc(b::Browser, x::Int, w::Int)
         if maxscroll > 0
             bar = styled(k in thumb ? "┃" : "│", k in thumb ? :REPL_DocBrowser_key : :REPL_DocBrowser_border)
             push!(b.hits, Hit(k + 2, (x + pw):(x + pw), (:scrollbar, (k - 1) / max(1, n - 1))))
-            line = annotatedstring(line, bar)
+            line = concat(line, bar)
         else
             line = fit(line, w)
         end
@@ -1707,7 +1722,7 @@ function frame(b::Browser)
             i > 1 && push!(parts, sep)
             push!(parts, r == 1 ? title : lines[r-1])
         end
-        styled_rows[r+1] = annotatedstring(parts...)
+        styled_rows[r+1] = concat(parts...)
     end
     styled_rows[1] = header_bar(b)
     styled_rows[H] = footer_bar(b)
@@ -1721,6 +1736,11 @@ function frame(b::Browser)
 end
 
 ansi(s::AnnotatedString, color::Bool=true) = sprint(print, s; context = :color => color)
+
+# Writes to the terminal, whose type is not known. The call is left to run time, since a
+# package that adds a method of `write` for its own kind of `IO` would otherwise invalidate
+# everything that writes, from the handling of keys up.
+put(b::Browser, x...) = (Base.inferencebarrier(write)(b.out, x...); nothing)
 
 # The rows that changed, in one write. Each one's line is deleted and put back blank before it
 # is written: xterm.js, VS Code's terminal, keeps a hyperlink's marker until its line is
@@ -1737,8 +1757,8 @@ function draw(b::Browser)
         end
     end
     print(buf, "\e[?2026l")
-    write(b.out, take!(buf))
-    flush(b.out)
+    put(b, take!(buf))
+    Base.inferencebarrier(flush)(b.out)
     b.prev = rows
     nothing
 end
@@ -1751,7 +1771,7 @@ const LEAVE_SCREEN = "\e[?2004l\e[?1006l\e[?1003l\e[?1002l\e[?1000l\e[?7h\e[?25h
 # Only a console has a raw mode, and only while it is open.
 function set_raw(b::Browser, raw::Bool)
     b.term isa REPL.Terminals.TTYTerminal && !(b.in isa Base.TTY && isopen(b.in)) && return
-    REPL.Terminals.raw!(b.term, raw)
+    dynamic(REPL.Terminals.raw!)(b.term, raw)
     return
 end
 
@@ -1761,14 +1781,14 @@ scheme_reports(on::Bool) = on ? "\e[?2031h\e[?996n\e]11;?\e\\" : "\e[?2031l"
 
 function enter_screen(b::Browser)
     set_raw(b, true)
-    write(b.out, ENTER_SCREEN)
-    rich_colours() && write(b.out, scheme_reports(true))
+    put(b, ENTER_SCREEN)
+    rich_colours() && put(b, scheme_reports(true))
     flush(b.out)
     b.prev = String[]
 end
 
 function leave_screen(b::Browser, drain::Bool=false)
-    write(b.out, (rich_colours() ? scheme_reports(false) : "") * LEAVE_SCREEN)
+    put(b, (rich_colours() ? scheme_reports(false) : "") * LEAVE_SCREEN)
     flush(b.out)
     # Mouse reports sent before reporting stopped would reach the prompt. They must be read
     # while still in raw mode, which delivers them without waiting for a newline.
@@ -1780,7 +1800,7 @@ function check_size!(b::Browser)
     h, w = displaysize(b.term)
     (h, w) == (b.height, b.width) && return false
     b.height, b.width = h, w
-    write(b.out, "\e[H\e[2J")
+    put(b, "\e[H\e[2J")
     b.prev = String[]
     return true
 end
@@ -1824,7 +1844,7 @@ signature and first paragraph, or the first paragraph of a section of the manual
 """
 function card_lines(b::Browser, @nospecialize(subject), width::Int)
     title, kind, md = card_content(b, subject)
-    lines = AnnotatedString{String}[annotatedstring(styled(title, :REPL_DocBrowser_title),
+    lines = AnnotatedString{String}[concat(styled(title, :REPL_DocBrowser_title),
                                                     styled(isempty(kind) ? "" : "  " * kind, :REPL_DocBrowser_dim))]
     body = md === nothing ? AnnotatedString{String}[] : render_markdown(md, width)
     while !isempty(body) && isempty(strip(String(first(body))))
@@ -1866,7 +1886,7 @@ end
 function docstring_start(results)
     isempty(results) && return nothing
     blocks = Any[]
-    for x in md_blocks(REPL.parsedoc(first(results)))
+    for x in md_blocks(dynamic(REPL.parsedoc)(first(results)))
         if x isa Markdown.Code && isempty(blocks)
             push!(blocks, x)
         elseif x isa Markdown.Paragraph
@@ -1937,7 +1957,7 @@ function overlay_card!(b::Browser, rows::Vector{AnnotatedString{String}})
     border = :REPL_DocBrowser_border
     box = AnnotatedString{String}[styled("╭" * "─"^(cw - 2) * "╮", border)]
     for l in lines
-        push!(box, annotatedstring(styled("│ ", border), fit(l, cw - 4), styled(" │", border)))
+        push!(box, concat(styled("│ ", border), fit(l, cw - 4), styled(" │", border)))
     end
     push!(box, styled("╰" * "─"^(cw - 2) * "╯", border))
     for (i, piece) in enumerate(box)
@@ -1958,11 +1978,11 @@ function overlay_console!(b::Browser, rows::Vector{AnnotatedString{String}})
     border = :REPL_DocBrowser_border
     w = b.width
     title = isempty(b.loading) ? " Loading failed " : " $(b.loading) "
-    box = AnnotatedString{String}[annotatedstring(styled("╭─", border), styled(title, :REPL_DocBrowser_section),
+    box = AnnotatedString{String}[concat(styled("╭─", border), styled(title, :REPL_DocBrowser_section),
                                                   styled("─"^max(0, w - 4 - textwidth(title)) * "╮", border))]
     for (i, l) in enumerate(shown)
-        text = i == 1 ? annotatedstring(styled("julia> ", :repl_prompt_julia), l[8:end]) : AnnotatedString(l)
-        push!(box, annotatedstring(styled("│ ", border), fit(text, w - 4), styled(" │", border)))
+        text = i == 1 ? concat(styled("julia> ", :repl_prompt_julia), l[8:end]) : AnnotatedString(l)
+        push!(box, concat(styled("│ ", border), fit(text, w - 4), styled(" │", border)))
     end
     push!(box, styled("╰" * "─"^(w - 2) * "╯", border))
     top = max(2, b.height - length(box))
@@ -1983,7 +2003,7 @@ function overlay_modal!(b::Browser, rows::Vector{AnnotatedString{String}})
     top = max(2, b.height ÷ 2 - 1)
     border = :REPL_DocBrowser_border
     box = [styled("╭" * "─"^(w - 2) * "╮", border),
-           annotatedstring(styled("│", border), styled(text, :REPL_DocBrowser_title), styled("│", border)),
+           concat(styled("│", border), styled(text, :REPL_DocBrowser_title), styled("│", border)),
            styled("╰" * "─"^(w - 2) * "╯", border)]
     for (i, piece) in enumerate(box)
         r = top + i - 1
@@ -1993,7 +2013,7 @@ end
 
 # `line` with `piece` drawn over it from column `col`.
 splice_cols(line::AnnotatedString{String}, col::Int, piece::AnnotatedString{String}) =
-    annotatedstring(take_cols(line, 1, col - 1), piece, take_cols(line, col + textwidth(String(piece)), typemax(Int)))
+    concat(take_cols(line, 1, col - 1), piece, take_cols(line, col + textwidth(String(piece)), typemax(Int)))
 
 # The columns `from` to `to` of `s`, with spaces for the part of a wide character cut at an edge.
 function take_cols(s::AnnotatedString{String}, from::Int, to::Int)
@@ -2015,7 +2035,7 @@ function take_cols(s::AnnotatedString{String}, from::Int, to::Int)
         col > to && break
     end
     mid = first_i == 0 ? AnnotatedString("") : s[first_i:last_i]
-    return annotatedstring(' '^lead, mid, ' '^trail)
+    return concat(' '^lead, mid, ' '^trail)
 end
 
 ## Selecting text ##
@@ -2142,7 +2162,7 @@ function copy_to_clipboard(b::Browser, text::String)
         # With no clipboard program, as on a server, the terminal is asked instead.
         @attempt (InteractiveUtils.clipboard(text); return "to the clipboard")
     end
-    write(b.out, "\e]52;c;", base64encode(text), "\a")
+    put(b, "\e]52;c;", base64encode(text), "\a")
     return "through the terminal"
 end
 
@@ -2521,7 +2541,7 @@ end
 function is_indirect(cat::Catalog, e::NameEntry)
     p = package_of(cat, e.mod)
     # The standard libraries are left in, since many are loaded by Julia itself.
-    return p !== nothing && p.role === :indirect && !Base.is_stdlib(p.id)
+    return p !== nothing && p.role === :indirect && !is_stdlib(p.id)
 end
 
 # Whether searches include indirect dependencies, kept for the next time the browser opens.
@@ -2676,7 +2696,7 @@ function handle!(b::Browser, ev::KeyEvent)
         b.layout = LAYOUTS[mod1(findfirst(==(b.layout), LAYOUTS) + 1, length(LAYOUTS))]
         LAYOUT[] = b.layout
         b.status = b.layout === :auto ? "Layout: fit the window" : "Layout: $(b.layout) pane" * (b.layout === :one ? "" : "s")
-        write(b.out, "\e[H\e[2J")
+        put(b, "\e[H\e[2J")
         b.prev = String[]
     elseif isplain(ev, 'i')
         b.internal = !b.internal
@@ -2706,7 +2726,7 @@ function handle!(b::Browser, ev::KeyEvent)
         b.expanded = all_open ? Set(DEFAULT_EXPANDED) : Set(SECTION_ORDER)
         refresh_side!(b)
     elseif isctrl(ev, 'l')
-        write(b.out, "\e[H\e[2J")
+        put(b, "\e[H\e[2J")
         b.prev = String[]
     else
         return false
@@ -2745,7 +2765,7 @@ end
 
 # The terminal lost the mouse encoding asked for, so it is asked for again.
 function handle!(b::Browser, ::LegacyMouseEvent)
-    b.live && write(b.out, "\e[?1000h\e[?1002h\e[?1003h\e[?1006h")
+    b.live && put(b, "\e[?1000h\e[?1002h\e[?1003h\e[?1006h")
     return false
 end
 
@@ -3143,9 +3163,9 @@ end
 function drain_mouse(io::IO)
     try
         while wait_bytes(io, 0.05)
-            mark(io)
+            dynamic(mark)(io)
             is_mouse = all(c -> wait_bytes(io, 0.03) && read(io, UInt8) == c, b"\e[<")
-            reset(io)
+            dynamic(reset)(io)
             is_mouse || return
             read_event(io)
         end
@@ -3212,7 +3232,7 @@ end
 # Draw again if the terminal has changed size, or it is time for a card to show.
 function tick(b::Browser)
     @lock b.lock try
-        b.quit || ((check_size!(b) | in_world(show_card!, b)) && in_world(draw, b))
+        b.quit || ((check_size!(b) | in_world(show_card!, b)::Bool) && in_world(draw, b))
     catch err
         # shown by the next draw, as for a key that fails
         b.status = "Error: " * first_line(err)
@@ -3245,7 +3265,7 @@ function run_screen!(b::Browser)
             ev === nothing && continue
             @lock b.lock begin
                 changed = try
-                    in_world(handle!, b, ev)
+                    in_world(handle!, b, ev)::Bool
                 catch err
                     err isa InterruptException && rethrow()
                     b.status = "Error: " * first_line(err)

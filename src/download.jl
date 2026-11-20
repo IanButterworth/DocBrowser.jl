@@ -8,7 +8,7 @@ const DOWNLOADS = PkgId(UUID("f43a241f-c20a-4ad4-852c-f6b1247861c6"), "Downloads
 # Exit hooks run last first. The one that waits for a download must run before the one that
 # closes the downloader, so it is set once the downloader is loaded.
 const downloader = OncePerProcess{Module}() do
-    m = Base.require_stdlib(DOWNLOADS)
+    m = dynamic(Base.require_stdlib)(DOWNLOADS)
     atexit(wait_for_download)
     return m
 end
