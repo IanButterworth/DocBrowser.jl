@@ -74,6 +74,7 @@ mutable struct Browser
     doc_key::Any
     doc_scroll::Int
     mark::Int       # the line of the heading last jumped to, marked so that the jump shows
+    doc_line::Int   # the line of the page the cursor is on, or 0 for the top of the pane
     link::Int
     pages::Dict{Tuple{Any,Int,Vector{Symbol}},Page}
     back::Vector{Snapshot}
@@ -146,7 +147,7 @@ function Browser(term::REPL.Terminals.TextTerminal, cat::Catalog=Catalog())
     b = Browser(term, term.in_stream, term.out_stream, cat, h, w, :side, :side,
                 ListState(1, 0), ListState(1, 0), SideRow[], NameRow[],
                 Set(DEFAULT_EXPANDED), Set{Symbol}(), Main, false, nothing, false,
-                NameEntry[], nothing, nothing, 0, 0, 0, Dict{Tuple{Any,Int,Vector{Symbol}},Page}(),
+                NameEntry[], nothing, nothing, 0, 0, 0, 0, Dict{Tuple{Any,Int,Vector{Symbol}},Page}(),
                 Snapshot[], Snapshot[], Hit[], nothing, "", false, false, nothing, String[],
                 (0.0, nothing), ReentrantLock(), Dict{Any,Set{Symbol}}(), :all, LAYOUT[],
                 get(term.out_stream, :color, true)::Bool || REPL.Terminals.hascolor(term),
@@ -604,6 +605,7 @@ function follow!(b::Browser, t::Target)
         t.heading in eachindex(p.headings) || return
         b.doc_scroll = p.headings[t.heading] - 1
         b.mark = p.headings[t.heading]
+        b.doc_line = b.mark
         b.focus = :doc
         b.link = 0
     elseif t isa ToggleTarget
@@ -1679,6 +1681,7 @@ function draw_doc(b::Browser, x::Int, w::Int)
         b.doc_key = key
         b.doc_scroll, b.link = under !== nothing && under[1] == key ? (under[2], under[3]) : (0, 0)
         b.mark = 0
+        b.doc_line = 0
         key === :help || (b.under_help = nothing)
         # What was under the pointer, and what was selected, belonged to the old page.
         b.hover = nothing
@@ -1688,6 +1691,9 @@ function draw_doc(b::Browser, x::Int, w::Int)
     p = page(b, key, pw)
     maxscroll = max(0, length(p.lines) - n)
     b.doc_scroll = clamp(b.doc_scroll, 0, maxscroll)
+    # The cursor starts on the selected link, and stays in view when the page scrolls under it.
+    b.doc_line == 0 && b.link in eachindex(p.spots) && (b.doc_line = p.spots[b.link].line)
+    b.doc_line = clamp(b.doc_line, b.doc_scroll + 1, max(b.doc_scroll + 1, min(b.doc_scroll + n, length(p.lines))))
     # A scroll bar in the last column, when the page does not fit.
     thumb = 0:-1
     if maxscroll > 0
@@ -1716,6 +1722,10 @@ function draw_doc(b::Browser, x::Int, w::Int)
             face_cols!(line, max(first(cols), indent + 1):last(cols), :REPL_DocBrowser_selection)
         end
         line = fit(line, pw)
+        if li == b.doc_line && b.focus === :doc && li <= length(p.lines)
+            face!(line, :REPL_DocBrowser_cursor)
+            !b.color && startswith(String(line), ' ') && (line = concat("›", line[2:end]))
+        end
         if maxscroll > 0
             bar = styled(k in thumb ? "┃" : "│", k in thumb ? :REPL_DocBrowser_key : :REPL_DocBrowser_border)
             push!(b.hits, Hit(k + 2, (x + pw):(x + pw), (:scrollbar, (k - 1) / max(1, n - 1))))
@@ -2255,6 +2265,8 @@ function press_doc!(b::Browser, row::Int, col::Int)
     b.focus = :doc
     li, col = pt
     p = page(b, current_key(b), doc_width(b))
+    b.doc_line = li
+    b.link in eachindex(p.spots) && p.spots[b.link].line == li || (b.link = 0)
     text = li <= length(p.lines) ? String(p.lines[li]) : ""
     if n == 1
         b.sel = (li, col, li, col)
@@ -2363,6 +2375,7 @@ function scroll_to_heading!(b::Browser, k::Int)
     b.doc_scroll = k in eachindex(p.headings) ? p.headings[k] - 1 : 0
     # Near the end of a page it cannot scroll that far, so the heading is marked instead.
     b.mark = k in eachindex(p.headings) ? p.headings[k] : 0
+    b.doc_line = b.mark
     b.link = 0
 end
 
@@ -2371,19 +2384,32 @@ function scroll_doc!(b::Browser, delta::Int)
     b.mark = 0
 end
 
+# Move the cursor `delta` lines. The page scrolls with it as far as it can, so the cursor keeps
+# its place on the screen, and moves on the screen only where the page cannot scroll further.
+function step_doc!(b::Browser, delta::Int)
+    p = page(b, current_key(b), doc_width(b))
+    n = content_rows(b)
+    from = max(b.doc_line, b.doc_scroll + 1)
+    line = clamp(from + delta, 1, max(1, length(p.lines)))
+    maxscroll = max(0, length(p.lines) - n)
+    b.doc_scroll = clamp(b.doc_scroll + line - from, max(0, line - n), min(maxscroll, line - 1))
+    b.doc_line = line
+    b.mark = 0
+    # The link that ⏎ follows is one on the cursor's line.
+    if !(b.link in eachindex(p.spots) && p.spots[b.link].line == line)
+        b.link = something(findfirst(s -> s.line == line, p.spots), 0)
+    end
+end
+
 function cycle_link!(b::Browser, dir::Int)
     p = page(b, current_key(b), doc_width(b))
     isempty(p.spots) && return (b.status = "No links on this page"; nothing)
     n = content_rows(b)
     if b.link == 0
-        first_visible = last_visible = 0
-        for (i, s) in enumerate(p.spots)
-            b.doc_scroll < s.line <= b.doc_scroll + n || continue
-            first_visible == 0 && (first_visible = i)
-            last_visible = i
-        end
-        b.link = first_visible == 0 ? (dir > 0 ? 1 : length(p.spots)) :
-                 dir > 0 ? first_visible : last_visible
+        # The first link from the cursor on, or back from it.
+        at = max(b.doc_line, b.doc_scroll + 1)
+        i = dir > 0 ? findfirst(s -> s.line >= at, p.spots) : findlast(s -> s.line <= at, p.spots)
+        b.link = something(i, dir > 0 ? 1 : length(p.spots))
     else
         b.link = mod1(b.link + dir, length(p.spots))
     end
@@ -2391,6 +2417,7 @@ function cycle_link!(b::Browser, dir::Int)
     if !(b.doc_scroll < line <= b.doc_scroll + n)
         b.doc_scroll = max(0, line - n ÷ 3)
     end
+    b.doc_line = line
     # Preview the selected link, as if the pointer rested on it: the card goes below its line.
     for (pane, x, _) in layout(b)
         pane === :doc || continue
@@ -2463,7 +2490,7 @@ function activate!(b::Browser, pane::Symbol)
         elseif key isa LoadTarget
             load_package!(b, key.id)
         else
-            b.status = "Press ⇥ to pick a link"
+            b.status = "No link on this line · ⇥ picks one"
         end
     end
 end
@@ -2533,6 +2560,7 @@ function jump_heading!(b::Browser, dir::Int)
     hs = dir > 0 ? filter(>(at), p.headings) : filter(<(at), p.headings)
     isempty(hs) && return (b.status = "No more headings"; nothing)
     b.mark = dir > 0 ? first(hs) : last(hs)
+    b.doc_line = b.mark
     b.doc_scroll = b.mark - 1
     b.focus = :doc
 end
@@ -2688,17 +2716,17 @@ function handle!(b::Browser, ev::KeyEvent)
     elseif isplain(ev, '/') || isctrl(ev, 'f')
         start_search!(b, something(b.query, ""))
     elseif ev.key === :up || isplain(ev, 'k') || isctrl(ev, 'p')
-        pane === :doc ? scroll_doc!(b, -1) : move!(b, pane, -1)
+        pane === :doc ? step_doc!(b, -1) : move!(b, pane, -1)
     elseif ev.key === :down || isplain(ev, 'j') || isctrl(ev, 'n')
-        pane === :doc ? scroll_doc!(b, 1) : move!(b, pane, 1)
+        pane === :doc ? step_doc!(b, 1) : move!(b, pane, 1)
     elseif ev.key === :pageup || isctrl(ev, 'b') || (ev.key === :char && ev.char == 'v' && ev.mods == ALT)
-        pane === :doc ? scroll_doc!(b, -(n - 2)) : move!(b, pane, -n)
+        pane === :doc ? step_doc!(b, -(n - 2)) : move!(b, pane, -n)
     elseif ev.key === :pagedown || isplain(ev, ' ') || isctrl(ev, 'v')
-        pane === :doc ? scroll_doc!(b, n - 2) : move!(b, pane, n)
+        pane === :doc ? step_doc!(b, n - 2) : move!(b, pane, n)
     elseif ev.key === :home || isplain(ev, 'g')
-        pane === :doc ? (b.doc_scroll = 0) : move!(b, pane, -typemax(Int) ÷ 2)
+        pane === :doc ? step_doc!(b, -typemax(Int) ÷ 2) : move!(b, pane, -typemax(Int) ÷ 2)
     elseif ev.key === :end || isplain(ev, 'G')
-        pane === :doc ? (b.doc_scroll = typemax(Int) ÷ 2) : move!(b, pane, typemax(Int) ÷ 2)
+        pane === :doc ? step_doc!(b, typemax(Int) ÷ 2) : move!(b, pane, typemax(Int) ÷ 2)
     elseif ev.key === :left && ev.mods & ALT != 0 || isplain(ev, '[')
         go_back!(b)
     elseif ev.key === :right && ev.mods & ALT != 0 || isplain(ev, ']')
