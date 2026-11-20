@@ -834,6 +834,16 @@ end
     codes = [s.target for s in pb.spots if s.target isa DocBrowser.CodeTarget]
     @test codes == [DocBrowser.CodeTarget("[deps]\n\nFoo = \"1\"", false), DocBrowser.CodeTarget("1 + 1\n2 + 2", true)]
     @test all(DocBrowser.is_code_line, pb.lines[1:3])
+    # A file named in code, in lower case or in a path is not taken for a package.
+    pb = DocBrowser.PageBuilder(60)
+    DocBrowser.add_markdown!(pb, Markdown.parse("""
+        ```
+        \$ julia Script.jl
+        ```
+
+        Run `julia script.jl`, or src/Foo.jl, with NotAPackageXyz.jl.
+        """), Main, b.cat)
+    @test [s.target for s in pb.spots if s.target isa DocBrowser.URLTarget] == [DocBrowser.web_search("NotAPackageXyz")]
     # y on code that is not Julia says so, and stays.
     path = tempname() * ".md"
     write(path, "# Settings\n\n```toml\nx = 1\n```\n")

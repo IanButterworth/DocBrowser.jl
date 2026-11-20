@@ -330,8 +330,10 @@ function find_spots!(spots::Vector{Spot}, row::Int, line::AnnotatedString, ctx::
         push!(taken, cols)
         push!(spots, Spot(row, cols, target))
     end
-    # Mentions of packages, such as `Revise.jl`.
-    for m in eachmatch(r"(?<![\w.])([A-Za-z_][A-Za-z0-9_]*)\.jl\b", str)
+    # Mentions of packages, such as `Revise.jl`. Package names start with a capital letter, and
+    # in code, or after a `/`, such a name is the name of a file.
+    is_code_line(line) && return
+    for m in eachmatch(r"(?<![\w./])([A-Z][A-Za-z0-9_]*)\.jl\b", str)
         r = m.offset:(m.offset + ncodeunits(m.match) - 1)
         col = textwidth(SubString(str, 1, prevind(str, first(r)))) + 1
         cols = col:col+textwidth(m.match)-1
