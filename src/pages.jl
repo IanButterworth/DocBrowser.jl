@@ -373,7 +373,7 @@ end
     add_markdown!(pb, md, ctx, cat; contents=false)
 
 Render `md`, making links of the names it mentions, which are looked up from module `ctx`.
-Examples get a link that pastes them at the prompt. With `contents`, a page with several
+Blocks of code get a ⧉ that copies them. With `contents`, a page with several
 headings starts with links to them.
 """
 function add_markdown!(pb::PageBuilder, md, ctx::Module, cat::Catalog; contents::Bool=false)
@@ -395,14 +395,15 @@ function add_markdown!(pb::PageBuilder, md, ctx::Module, cat::Catalog; contents:
     for line in lines
         code = is_code_line(line)
         if !code && !isempty(block)
-            add_paste_link!(pb, block)
+            add_copy_mark!(pb, block)
             empty!(block)
         end
-        push!(pb.lines, untab(line))
+        # Code is indented further, which leaves room for its mark in the margin.
+        push!(pb.lines, code ? concat("  ", untab(line)) : untab(line))
         find_spots!(pb.spots, length(pb.lines), pb.lines[end], ctx, refs, cat)
         code && push!(block, String(line))
     end
-    isempty(block) || add_paste_link!(pb, block)
+    isempty(block) || add_copy_mark!(pb, block)
 end
 
 is_code_line(line::AnnotatedString) =
@@ -411,8 +412,9 @@ is_code_line(line::AnnotatedString) =
 """
     paste_text(lines) -> Union{String, Nothing}
 
-What to paste for a rendered code block: the input of each `julia>` prompt in an example,
-or the whole block if it is long enough to be worth it.
+What to copy or paste for a rendered code block: the input of each `julia>` prompt in an
+example, or the whole block if it is long enough to be worth it. A signature at the top of a
+docstring is not.
 """
 function paste_text(lines::Vector{String})
     text = String[]
@@ -446,10 +448,12 @@ function paste_text(lines::Vector{String})
     return String(take!(out))
 end
 
-function add_paste_link!(pb::PageBuilder, block::Vector{String})
+# A place in the margin of the first line of a block of code that copies the code. Its ⧉ is
+# drawn only while the pointer or the cursor is in the block.
+function add_copy_mark!(pb::PageBuilder, block::Vector{String})
     code = paste_text(block)
-    code === nothing && return
-    addline!(pb, "  ", ("⧉ paste at the prompt", nothing, CodeTarget(code)))
+    (code === nothing || isempty(strip(code))) && return
+    push!(pb.spots, Spot(length(pb.lines) - length(block) + 1, 1:1, CodeTarget(code)))
 end
 
 ## Source locations ##

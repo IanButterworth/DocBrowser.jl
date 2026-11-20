@@ -571,10 +571,6 @@ end
     @test length(DocBrowser.layout(b)) == 1
     handle!(b, KeyEvent('w'))
     @test b.layout === :auto
-
-    # A paste link returns its code.
-    DocBrowser.follow!(b, DocBrowser.CodeTarget("1 + 1"))
-    @test b.quit && b.result == "1 + 1"
 end
 
 @testset "browse objects, reopening, no colour" begin
@@ -788,6 +784,35 @@ end
     @test DocBrowser.word_cols("see Base.sort!.", 6) == 5:14
     @test DocBrowser.word_cols("a  b", 2) === nothing
     @test DocBrowser.col_slice("αβγδ", 2, 3) == "βγ"
+end
+
+@testset "copying code" begin
+    b = test_browser()
+    DocBrowser.follow!(b, NameTarget(@__MODULE__, :Shape))
+    frame(b)
+    p = DocBrowser.page(b, DocBrowser.current_key(b), DocBrowser.doc_width(b))
+    # The example is indented, and has no line of its own to copy it.
+    k = findfirst(l -> occursin("julia> 1 + 1", String(l)), p.lines)
+    @test startswith(String(p.lines[k]), "    julia>") && startswith(String(p.lines[k+1]), "    2")
+    @test !any(l -> occursin("paste at the prompt", String(l)), p.lines)
+    # Its ⧉ shows only while the pointer or the cursor is in it.
+    x = only(l[2] for l in DocBrowser.layout(b) if l[1] === :doc)
+    row = k - b.doc_scroll + 2
+    copy_mark() = any(l -> DocBrowser.col_slice(strip_ansi(l), x, x) == "⧉", frame(b))
+    @test !copy_mark()
+    handle!(b, MouseEvent(:move, 0, row + 1, x + 6, 0))
+    @test copy_mark()
+    handle!(b, MouseEvent(:move, 0, 1, 1, 0))
+    @test !copy_mark()
+    # With the cursor in it, ⏎ copies the code and stays, and y puts it at the prompt.
+    b.focus = :doc
+    b.doc_line = k
+    press!(b, :down)
+    @test copy_mark() && occursin("⏎ copy code", strip_ansi(frame(b)[end]))
+    press!(b, :enter)
+    @test COPIED[end] == "1 + 1" && !b.quit && occursin("Copied 1 line of code", b.status)
+    press!(b, 'y')
+    @test b.quit && b.result == "1 + 1"
 end
 
 @testset "the manual" begin
