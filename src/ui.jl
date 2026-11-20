@@ -2442,15 +2442,17 @@ function scroll_doc!(b::Browser, delta::Int)
     b.mark = 0
 end
 
-# Move the cursor `delta` lines. The page scrolls with it as far as it can, so the cursor keeps
-# its place on the screen, and moves on the screen only where the page cannot scroll further.
+# Move the cursor `delta` lines. The page scrolls with it, so the cursor keeps its place on the
+# screen, but never closer than a few lines to the top or bottom, so what is around it shows.
+# Where the page cannot scroll further, the cursor moves on the screen instead.
 function step_doc!(b::Browser, delta::Int)
     p = page(b, current_key(b), doc_width(b))
     n = content_rows(b)
     from = max(b.doc_line, b.doc_scroll + 1)
     line = clamp(from + delta, 1, max(1, length(p.lines)))
     maxscroll = max(0, length(p.lines) - n)
-    b.doc_scroll = clamp(b.doc_scroll + line - from, max(0, line - n), min(maxscroll, line - 1))
+    margin = min(5, (n - 1) ÷ 2)
+    b.doc_scroll = clamp(clamp(b.doc_scroll + line - from, line - n + margin, line - 1 - margin), 0, maxscroll)
     b.doc_line = line
     b.mark = 0
     # The link that ⏎ follows is one on the cursor's line.

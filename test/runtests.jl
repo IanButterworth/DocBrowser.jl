@@ -1492,15 +1492,18 @@ end
     press!(b, ' ');       @test b.doc_scroll > 0
     press!(b, :home);     @test b.doc_scroll == 0
     press!(b, :end);      @test b.doc_scroll > 0
-    press!(b, 'g', 'j');  @test b.doc_scroll == 1
-    press!(b, 'k');       @test b.doc_scroll == 0
+    press!(b, 'g', 'j');  @test b.doc_scroll == 0 && b.doc_line == 2
+    press!(b, 'k');       @test b.doc_line == 1
     press!(b, 'o');       @test occursin("web link", b.status)
     press!(b, :enter);    @test occursin("No link on this line", b.status)
-    # The cursor keeps its row while the page scrolls, and moves where the page cannot scroll.
-    press!(b, 'j', 'j');  @test b.doc_scroll == 2 && b.doc_line == 3
+    # The cursor moves down five rows before the page scrolls, which keeps five lines above it.
+    press!(b, 'j', 'j', 'j', 'j', 'j'); @test b.doc_scroll == 0 && b.doc_line == 6
+    press!(b, 'j');       @test b.doc_scroll == 1 && b.doc_line == 7
+    press!(b, 'k');       @test b.doc_scroll == 0 && b.doc_line == 6
+    # At the end of the page, where it cannot scroll, the cursor moves on to the last line.
     nlines = length(DocBrowser.page(b, DocBrowser.current_key(b), DocBrowser.doc_width(b)).lines)
     press!(b, 'G');       @test b.doc_line == nlines
-    press!(b, 'k');       @test b.doc_line == nlines - 1 == b.doc_scroll + DocBrowser.content_rows(b)
+    press!(b, 'k');       @test b.doc_line == nlines - 1 == b.doc_scroll + DocBrowser.content_rows(b) - 1
     press!(b, 'g');       @test b.doc_line == 1 && b.doc_scroll == 0
     # ⇥ puts the cursor on the link it picks, and the cursor picks a link on its line.
     press!(b, :tab);      line = b.doc_line; @test b.link > 0
