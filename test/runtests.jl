@@ -2053,9 +2053,34 @@ end
         close(io)
         (code, read(path, String))
     end
-    @test out[1] == 0 && startswith(out[2], "# Base.sort!")
+    @test out[1] == 0 && startswith(out[2], "# Base.sort!  (Julia $VERSION)")
     @test redirect_stderr(() -> DocBrowser.main(String[]), devnull) == 1
     @test redirect_stdout(() -> DocBrowser.main(["--help"]), devnull) == 0
+    # An option the command does not have, or a command that does not exist, is an error.
+    for args in (["show", "x", "--sectoin", "2"], ["find", "x", "--load"], ["show", "x", "--section", "x"], ["frob", "x"])
+        @test redirect_stderr(() -> DocBrowser.main(args), devnull) == 2
+    end
+    DocBrowser.CLI[] = false
+end
+
+@testset "plain text: the manual, and docstrings from several modules" begin
+    @test occursin("\n  manual/arrays  ", DocBrowser.lookup("manual"))
+    @eval module DocA
+        "    f(x)\n\nA's f.\n\n# Notes\n\nMore about A."
+        f(x) = 1
+    end
+    @eval module DocB
+        import ..DocA
+        "    f(::String)\n\nB's method of f.\n\n# Notes\n\nMore about B."
+        DocA.f(::String) = 2
+    end
+    # Each docstring says which module it is from, and so does each heading in the outline.
+    page = DocBrowser.lookup("DocA.f")
+    @test occursin(r"From Main.DocA\[\d+\]:", page) && occursin(r"From Main.DocB\[\d+\]:", page)
+    @test occursin("§1 Notes  (from Main.DocA)\n§2 Notes  (from Main.DocB)", DocBrowser.lookup("DocA.f"; outline=true))
+    # In brief, the signature and first paragraph of each.
+    brief = DocBrowser.lookup("DocA.f"; brief=true)
+    @test occursin("A's f.", brief) && occursin("B's method of f.", brief) && !occursin("More about", brief)
 end
 
 foreach((r, v) -> r[] = v, SETTINGS, SAVED)

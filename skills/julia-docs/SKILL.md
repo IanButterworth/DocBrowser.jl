@@ -22,7 +22,8 @@ Run them in the project's directory, or pass `--project PATH`.
   and of the manual, for when the name is not known.
 - `docbrowser show <query>`: one page. A query is a name (`Base.sort!`, `DataFrames.select`),
   a module (`Base.Iterators`), or a place in the manual (`manual/arrays#Broadcasting`,
-  `stdlib/Random`, `base/sort`).
+  `stdlib/Random`, `base/sort`). `show manual` lists the pages of the manual. The first line
+  gives the version the page is about.
 - `docbrowser names <module>`: the names of a module, by kind, and whether each is exported
   or public. `--internal` adds the others.
 
@@ -30,6 +31,11 @@ Run them in the project's directory, or pass `--project PATH`.
 
 - For a long page, such as a manual chapter, run `show <query> --outline` first. It lists the
   numbered headings. Then `show <query> --section N` gives only that part.
+- For a function with many docstrings or a very long one, `show <query> --brief` gives the
+  signature and first paragraph of each docstring. When the docstrings come from several
+  modules, as when a package adds a method to a function of `Base`, each starts with a
+  `From Module:` line, and the outline says which one each heading is in.
+- A mistyped option is an error, with exit code 2; it is never silently ignored.
 - Links in a page end in a number, as in `sortslices[2]`. The `Links:` list at the end gives
   what each number leads to, in a form `show` takes.
 - A docstring page ends with its methods and the file and line where each is defined. Read
