@@ -234,7 +234,7 @@ end
     frame(b)
     # Step through the links and follow the first one.
     handle!(b, KeyEvent(:tab))
-    @test b.link == 1
+    @test b.link > 0
     handle!(b, KeyEvent(:enter))
     @test DocBrowser.current_key(b).name === :documented_public
     handle!(b, KeyEvent(:backspace))
@@ -524,7 +524,7 @@ area(s::Square) = s.side^2
 
     @test DocBrowser.paste_text(["  julia> x = 1", "  1", "", "  julia> f(x,", "             y)"]) ==
         "x = 1\nf(x,\n    y)"
-    @test DocBrowser.paste_text(["  sum(x)"]) === nothing
+    @test DocBrowser.paste_text(["  sum(x)"]) == "sum(x)"
     @test DocBrowser.licence(pkgdir(DocBrowser)) == "MIT"
     @test DocBrowser.licence(mktempdir()) === nothing
 end
@@ -813,6 +813,39 @@ end
     @test COPIED[end] == "1 + 1" && !b.quit && occursin("Copied 1 line of code", b.status)
     press!(b, 'y')
     @test b.quit && b.result == "1 + 1"
+
+    # Every block can be copied, whole across blank lines; only Julia goes to the prompt.
+    pb = DocBrowser.PageBuilder(60)
+    DocBrowser.add_markdown!(pb, Markdown.parse("""
+        ```toml
+        [deps]
+
+        Foo = "1"
+        ```
+
+        ```jldoctest
+        julia> 1 + 1
+        2
+
+        julia> 2 + 2
+        4
+        ```
+        """), Main, b.cat)
+    codes = [s.target for s in pb.spots if s.target isa DocBrowser.CodeTarget]
+    @test codes == [DocBrowser.CodeTarget("[deps]\n\nFoo = \"1\"", false), DocBrowser.CodeTarget("1 + 1\n2 + 2", true)]
+    @test all(DocBrowser.is_code_line, pb.lines[1:3])
+    # y on code that is not Julia says so, and stays.
+    path = tempname() * ".md"
+    write(path, "# Settings\n\n```toml\nx = 1\n```\n")
+    b = test_browser()
+    DocBrowser.follow!(b, DocBrowser.ManualTarget(path, ""))
+    frame(b)
+    p = DocBrowser.page(b, DocBrowser.current_key(b), DocBrowser.doc_width(b))
+    b.focus = :doc
+    b.doc_line = findfirst(l -> occursin("x = 1", String(l)), p.lines)
+    @test !occursin("y send", strip_ansi(frame(b)[end]))
+    press!(b, 'y')
+    @test !b.quit && occursin("Only Julia code", b.status)
 end
 
 @testset "the manual" begin

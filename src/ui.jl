@@ -615,7 +615,7 @@ function follow!(b::Browser, t::Target)
     elseif t isa CodeTarget
         n = count(==('\n'), t.code) + 1
         how = COPY[](b, t.code)
-        b.status = "Copied $n line$(n == 1 ? "" : "s") of code $how · y on the code puts it at the prompt"
+        b.status = "Copied $n line$(n == 1 ? "" : "s") of code $how" * (t.julia ? " · y on the code puts it at the prompt" : "")
     elseif t isa URLTarget
         open_url(b, t.url)
     elseif t isa LoadTarget
@@ -972,11 +972,11 @@ function current_name(b::Browser)
     return nothing
 end
 
-# The code of the block that line `li` of the page is in, as its ⧉ copies it, or `nothing`.
+# What the ⧉ of the block of code that line `li` of the page is in copies, or `nothing`.
 function code_at(b::Browser, li::Int)
     p = page(b, current_key(b), doc_width(b))
     i = copy_spot(p, code_block_start(p, li))
-    return i === nothing ? nothing : (p.spots[i].target::CodeTarget).code
+    return i === nothing ? nothing : p.spots[i].target::CodeTarget
 end
 
 # The first line of the block of code that line `li` is in, or 0.
@@ -1141,9 +1141,11 @@ function hint_segments(b::Browser)
     elseif b.focus === :doc
         p = page(b, current_key(b), doc_width(b))
         # On code, what can be done with it comes first, as its ⧉ says little by itself.
-        oncode = copy_spot(p, code_block_start(p, b.doc_line)) !== nothing
-        hints = oncode ? [("⏎", "copy code"), ("y", "send it to prompt"), ("↑↓", "scroll"), ("⇥", "next link")] :
-            [("↑↓", "scroll"), ("⇥", "next link"), ("⏎", "follow"), ("[ ]", "back/forward")]
+        code = code_at(b, b.doc_line)
+        oncode = code !== nothing
+        hints = !oncode ? [("↑↓", "scroll"), ("⇥", "next link"), ("⏎", "follow"), ("[ ]", "back/forward")] :
+            code.julia ? [("⏎", "copy code"), ("y", "send it to prompt"), ("↑↓", "scroll"), ("⇥", "next link")] :
+            [("⏎", "copy code"), ("↑↓", "scroll"), ("⇥", "next link")]
         isempty(p.headings) || push!(hints, ("{ }", "headings"))
         any(s -> s.target == ToggleTarget(:extended), p.spots) && push!(hints, ("x", "extended"))
         current_key(b) === :start && push!(hints, ("t T", "tips"))
@@ -1243,7 +1245,7 @@ function describe_target(b::Browser, p::Page, t)
         return "↓ runs import $(t.id.name), then shows its documentation"
     elseif t isa CodeTarget
         n = count(==('\n'), t.code) + 1
-        return "⧉ copies $n line$(n == 1 ? "" : "s") of code · y on the code puts it at the prompt"
+        return "⧉ copies $n line$(n == 1 ? "" : "s") of code" * (t.julia ? " · y on the code puts it at the prompt" : "")
     elseif t isa ManualTarget
         i = manual_page_of(b.cat, t.path)
         title = i === nothing ? basename(dirname(dirname(dirname(t.path)))) : b.cat.manual[i].title
@@ -2463,15 +2465,18 @@ end
 
 function cycle_link!(b::Browser, dir::Int)
     p = page(b, current_key(b), doc_width(b))
-    isempty(p.spots) && return (b.status = "No links on this page"; nothing)
+    # Blocks of code are not stops: the cursor on one is enough to copy it.
+    links = [i for (i, s) in enumerate(p.spots) if !(s.target isa CodeTarget)]
+    isempty(links) && return (b.status = "No links on this page"; nothing)
     n = content_rows(b)
-    if b.link == 0
+    k = findfirst(==(b.link), links)
+    if k === nothing
         # The first link from the cursor on, or back from it.
         at = max(b.doc_line, b.doc_scroll + 1)
-        i = dir > 0 ? findfirst(s -> s.line >= at, p.spots) : findlast(s -> s.line <= at, p.spots)
-        b.link = something(i, dir > 0 ? 1 : length(p.spots))
+        k = dir > 0 ? findfirst(i -> p.spots[i].line >= at, links) : findlast(i -> p.spots[i].line <= at, links)
+        b.link = links[something(k, dir > 0 ? 1 : length(links))]
     else
-        b.link = mod1(b.link + dir, length(p.spots))
+        b.link = links[mod1(k + dir, length(links))]
     end
     line = p.spots[b.link].line
     if !(b.doc_scroll < line <= b.doc_scroll + n)
@@ -2847,8 +2852,10 @@ function handle!(b::Browser, ev::KeyEvent)
         end
     elseif isplain(ev, 'y')
         code = pane === :doc ? code_at(b, b.doc_line) : nothing
-        name = something(code, current_name(b), Some(nothing))
-        if name === nothing
+        name = code === nothing ? current_name(b) : code.julia ? code.code : nothing
+        if code !== nothing && !code.julia
+            b.status = "Only Julia code goes to the prompt · ⏎ copies this"
+        elseif name === nothing
             b.status = "Nothing to insert here"
         else
             b.result = name
@@ -3174,8 +3181,8 @@ This browser shows Julia's manual, under *Julia*, and the loaded packages, under
 
 # Leaving the browser
 
-  * `y`: close the browser and put the name being viewed at the REPL prompt. On a line of code,
-    it puts that block of code there instead, as only its input when it is an example.
+  * `y`: close the browser and put the name being viewed at the REPL prompt. On a line of Julia
+    code, it puts that block of code there instead, as only its input when it is an example.
   * ⧉, beside a block of code: copy the code, as only its input when it is an example.
   * `e`: open the source of the selected link or name, or else of the page, in your editor.
   * Right-click, `Alt`-click or `Ctrl`-click: open the source of what is under the pointer.
