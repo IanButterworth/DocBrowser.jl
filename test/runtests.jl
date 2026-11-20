@@ -658,7 +658,17 @@ end
     # Without colour the legend matches the letters in the list.
     out = IOContext(IOBuffer(), :displaysize => (30, 130), :color => false)
     b = Browser(FakeTerminal(IOBuffer(""), out, IOBuffer(), false))
-    @test occursin("E exported", frame(b)[end])
+    DocBrowser.show_module!(b, Fixture)
+    legend = frame(b)[end-1]
+    @test occursin("E exported", legend) && !occursin("internal", legend)
+    handle!(b, KeyEvent('i'))
+    @test occursin("- internal", frame(b)[end-1])
+
+    # A name from another package is marked as a re-export, but Base's names from Core are not.
+    entry(m, owner) = DocBrowser.NameEntry(m, :x, :function, :exported, true, owner)
+    @test DocBrowser.reexported_from(entry(Fixture, Base)) === Base
+    @test DocBrowser.reexported_from(entry(Base, Core)) === nothing
+    @test DocBrowser.reexported_from(entry(Base, Base.Iterators)) === nothing
 end
 
 @testset "JLL pages" begin

@@ -512,7 +512,7 @@ function restore!(b::Browser, s::Snapshot)
     i = findfirst(r -> row_key(r) == s.names, b.name_rows)
     b.names.cursor = something(i, 1)
     reveal!(b.side, content_rows(b))
-    reveal!(b.names, content_rows(b), names_offset(b))
+    reveal!(b.names, list_rows(b, :names), names_offset(b))
     b.doc_key = current_key(b)
     b.doc_scroll = s.doc_scroll
     # Select the link again, which is often the one that was followed, to show where we were.
@@ -594,7 +594,7 @@ function show_module!(b::Browser, m::Module; entry::Union{Nothing,Symbol}=nothin
         b.override = something(e, ModuleTarget(m))
     else
         b.names.cursor = i
-        b.names.scroll = max(0, i - names_offset(b) - content_rows(b) ÷ 3)
+        b.names.scroll = max(0, i - names_offset(b) - list_rows(b, :names) ÷ 3)
     end
 end
 
@@ -1113,12 +1113,12 @@ function hint_segments(b::Browser)
         isempty(p.headings) || push!(hints, ("{ }", "headings"))
         any(s -> s.target == ToggleTarget(:extended), p.spots) && push!(hints, ("x", "extended"))
         current_key(b) === :start && push!(hints, ("t T", "tips"))
-        return vcat(narrow, hints, [("/", "search"), ("y", "to prompt"), ("e", "source"), ("c", "link")])
+        return vcat(narrow, hints, [("/", "search"), ("y", "send to prompt"), ("e", "source"), ("c", "link")])
     else
         # On a narrow terminal the layout matters most, so it comes first.
         return vcat(narrow, [("↑↓", "move"), ("⏎", "open"), ("←→", "panes"), ("/", "search"),
                      ("i", b.internal ? "hide internal" : "internal"), ("[ ]", "back/forward"),
-                     ("y", "to prompt")])
+                     ("y", "send to prompt")])
     end
 end
 
@@ -1259,18 +1259,36 @@ function footer_bar(b::Browser)
     for (key, label) in tail
         put_hint!(rb, key, label)
     end
-    legend = b.color ?
-        Seg[Seg(" ● ", :REPL_DocBrowser_exported), Seg("exported"), Seg(" ○ ", :REPL_DocBrowser_public),
-            Seg("public"), Seg(" · ", :REPL_DocBrowser_internal), Seg("internal ")] :
-        Seg[Seg(" E "), Seg("exported"), Seg(" P "), Seg("public"), Seg(" - "), Seg("internal ")]
-    lw = segs_width(legend)
-    # Each hint ends in two spaces, which keep the legend apart from them.
-    if !b.help && b.width - width(rb) >= lw
-        put_seg!(rb, ' '^(b.width - width(rb) - lw))
-        put_segs!(rb, legend)
-    end
     return under_face(fit(build(rb), b.width), :REPL_DocBrowser_bar)
 end
+
+# What the markers in the list of names mean. Internal names are only explained while they
+# are listed, and so are re-exports. A narrow pane gets shorter words, then initials.
+function names_legend(b::Browser, w::Int)
+    marks = b.color ? Tuple{String,Any}[(" ● ", :REPL_DocBrowser_exported), (" ○ ", :REPL_DocBrowser_public),
+                                        (" · ", :REPL_DocBrowser_internal)] :
+                      Tuple{String,Any}[(" E ", nothing), (" P ", nothing), (" - ", nothing)]
+    words = [("exported", "export"), ("public", "public"), ("internal", "internal")]
+    b.internal || (pop!(marks); pop!(words))
+    if b.query === nothing && any(r -> r.kind === :entry && reexported_from(r.entry) !== nothing, b.name_rows)
+        push!(marks, (" ↗ ", nothing))
+        push!(words, ("re-exported", "re-export"))
+    end
+    local segs
+    for form in (first, last, w -> first(first(w), 1))
+        segs = Seg[]
+        for (m, word) in zip(marks, words)
+            push!(segs, Seg(m...), Seg(form(word), :REPL_DocBrowser_dim))
+        end
+        segs_width(segs) <= w && break
+    end
+    return segs
+end
+
+# The names pane keeps its last row for the legend.
+has_legend(b::Browser, pane::Symbol) = pane === :names && side_placeholder(b) === nothing &&
+    content_rows(b) > 2 && any(r -> r.kind === :entry, b.name_rows)
+list_rows(b::Browser, pane::Symbol) = content_rows(b) - has_legend(b, pane)
 
 function put_hint!(rb::RowBuilder, key::String, label::String)
     action = hint_key(key)
@@ -1513,7 +1531,17 @@ function list_line(b::Browser, pane::Symbol, i::Int, x::Int, w::Int, row::Int)
             face = e.vis === :internal ? :REPL_DocBrowser_dim : nothing
             e.deprecated && (face = [:REPL_DocBrowser_dim, :strikethrough])
             put_match!(rb, name, face, action)
-            if b.query !== nothing && !is_module_entry(e)
+            from = b.query === nothing ? reexported_from(e) : nothing
+            if from !== nothing
+                # Without room for the package, the arrow alone still says it is a re-export.
+                where = " ↗ " * display_name(from)
+                room = w - width(rb) - 1
+                textwidth(where) > room && (where = " ↗")
+                if room >= 2
+                    put_seg!(rb, ' '^max(1, room - textwidth(where)))
+                    put_seg!(rb, where, :REPL_DocBrowser_dim)
+                end
+            elseif b.query !== nothing && !is_module_entry(e)
                 where = " " * display_name(e.mod)
                 room = w - width(rb) - 1
                 if room > 4
@@ -1543,6 +1571,16 @@ function list_line(b::Browser, pane::Symbol, i::Int, x::Int, w::Int, row::Int)
     return line
 end
 
+# The package that a name of another package comes from, for a re-export. Base does not count
+# as re-exporting Core, and a module listed under its own name needs no note.
+function reexported_from(e::NameEntry)
+    from = Base.moduleroot(e.owner)
+    to = Base.moduleroot(e.mod)
+    (from === to || from === Core && to === Base) && return nothing
+    e.kind === :module && nameof(from) === e.name && return nothing
+    return from
+end
+
 # Show `name`, with the part that matches the search query emphasised.
 function put_match!(rb::RowBuilder, name::String, face, action)
     q = rb.b.query
@@ -1569,9 +1607,15 @@ function draw_list(b::Browser, pane::Symbol, x::Int, w::Int)
     ls = pane === :side ? b.side : b.names
     offset = list_offset(b, pane)
     len = (pane === :side ? length(b.side_rows) : length(b.name_rows)) - offset
-    ls.scroll = clamp(ls.scroll, 0, max(0, len - n))
-    for k in 1:n
+    m = list_rows(b, pane)
+    ls.scroll = clamp(ls.scroll, 0, max(0, len - m))
+    for k in 1:m
         push!(lines, list_line(b, pane, offset + ls.scroll + k, x, w, k + 2))
+    end
+    if m < n
+        rb = RowBuilder(b, n + 2, x)
+        put_segs!(rb, names_legend(b, w))
+        push!(lines, fit(build(rb), w))
     end
     return lines
 end
@@ -2251,7 +2295,7 @@ function move!(b::Browser, pane::Symbol, delta::Int)
     len = pane === :side ? length(b.side_rows) : length(b.name_rows)
     len == 0 && return
     ls.cursor = clamp(ls.cursor + delta, 1, len)
-    reveal!(ls, content_rows(b), list_offset(b, pane))
+    reveal!(ls, list_rows(b, pane), list_offset(b, pane))
     b.override = nothing
     b.source = pane
     pane === :side && sync_side!(b)
@@ -2301,7 +2345,7 @@ function open_manual!(b::Browser, path::String, k::Int)
     i === nothing && return # the names pane lists something else
     # Pick the heading in the names pane too.
     r = findfirst(r -> r.kind === :heading && r.count == k && (r.hit === nothing || r.hit.path == path), b.name_rows)
-    r === nothing || (b.names.cursor = r; reveal!(b.names, content_rows(b), names_offset(b)))
+    r === nothing || (b.names.cursor = r; reveal!(b.names, list_rows(b, :names), names_offset(b)))
 end
 
 # When a heading of a manual page is picked, scroll the page to it.
@@ -2894,7 +2938,7 @@ function handle!(b::Browser, ev::MouseEvent)
             ls = pane === :side ? b.side : b.names
             len = pane === :side ? length(b.side_rows) : length(b.name_rows)
             len -= list_offset(b, pane)
-            ls.scroll = clamp(ls.scroll + delta, 0, max(0, len - content_rows(b)))
+            ls.scroll = clamp(ls.scroll + delta, 0, max(0, len - list_rows(b, pane)))
         end
         return true
     elseif ev.action === :press
