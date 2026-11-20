@@ -658,7 +658,17 @@ end
     # Without colour the legend matches the letters in the list.
     out = IOContext(IOBuffer(), :displaysize => (30, 130), :color => false)
     b = Browser(FakeTerminal(IOBuffer(""), out, IOBuffer(), false))
-    @test occursin("E exported", frame(b)[end])
+    DocBrowser.show_module!(b, Fixture)
+    legend = frame(b)[end-1]
+    @test occursin("E exported", legend) && !occursin("internal", legend)
+    handle!(b, KeyEvent('i'))
+    @test occursin("- internal", frame(b)[end-1])
+
+    # A name from another package is marked as a re-export, but Base's names from Core are not.
+    entry(m, owner) = DocBrowser.NameEntry(m, :x, :function, :exported, true, owner)
+    @test DocBrowser.reexported_from(entry(Fixture, Base)) === Base
+    @test DocBrowser.reexported_from(entry(Base, Core)) === nothing
+    @test DocBrowser.reexported_from(entry(Base, Base.Iterators)) === nothing
 end
 
 @testset "JLL pages" begin
@@ -1460,7 +1470,16 @@ end
     press!(b, 'g', 'j');  @test b.doc_scroll == 1
     press!(b, 'k');       @test b.doc_scroll == 0
     press!(b, 'o');       @test occursin("web link", b.status)
-    press!(b, :enter);    @test occursin("pick a link", b.status)
+    press!(b, :enter);    @test occursin("No link on this line", b.status)
+    # The cursor keeps its row while the page scrolls, and moves where the page cannot scroll.
+    press!(b, 'j', 'j');  @test b.doc_scroll == 2 && b.doc_line == 3
+    nlines = length(DocBrowser.page(b, DocBrowser.current_key(b), DocBrowser.doc_width(b)).lines)
+    press!(b, 'G');       @test b.doc_line == nlines
+    press!(b, 'k');       @test b.doc_line == nlines - 1 == b.doc_scroll + DocBrowser.content_rows(b)
+    press!(b, 'g');       @test b.doc_line == 1 && b.doc_scroll == 0
+    # ⇥ puts the cursor on the link it picks, and the cursor picks a link on its line.
+    press!(b, :tab);      line = b.doc_line; @test b.link > 0
+    press!(b, 'j', 'k');  @test b.doc_line == line && b.link > 0
     press!(b, :backtab);  @test b.link > 0
     press!(b, :escape);   @test b.link == 0 && !b.quit
     # History with the keyboard: ⌫ [ ] and Alt with arrows or b and f.
@@ -1496,6 +1515,11 @@ end
         press!(b, k)
         @test b.quit
     end
+    # On a page that fits, ↓ moves the cursor.
+    b = test_browser()
+    DocBrowser.follow!(b, NameTarget(Fixture, :documented))
+    frame(b)
+    press!(b, 'j');       @test b.doc_scroll == 0 && b.doc_line == 2
 end
 
 @testset "keys while searching" begin
