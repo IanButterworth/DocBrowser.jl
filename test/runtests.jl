@@ -1794,6 +1794,14 @@ end
         @test occursin("docs o.github.io/P.jl/stable", String(pb.lines[end]))
         write(joinpath(dir, "README.md"), "<a href=\"https://o.github.io/P.jl/dev\"><img src=\"docs-dev.svg\"></a>")
         @test DocBrowser.docs_url(dir) == "https://o.github.io/P.jl/dev"
+        # Without a badge, a plain link to docs, as Makie's backends have, but not Julia's manual.
+        write(joinpath(dir, "README.md"), """
+            See the [Julia manual](https://docs.julialang.org/en/v1/) first.
+            Read the docs for P and its backends [here](http://docs.p.org/stable).
+            """)
+        @test DocBrowser.docs_url(dir) == "http://docs.p.org/stable"
+        write(joinpath(dir, "README.md"), "See the [Julia manual](https://docs.julialang.org/en/v1/).")
+        @test DocBrowser.docs_url(dir) === nothing
     end
     # A standard library in Julia's repository has Julia's licence, and a JLL that of its library.
     pb = DocBrowser.PageBuilder(200)

@@ -844,6 +844,16 @@ function docs_url(dir)
         occursin(r"stable"i, label * url) && return url
         found === nothing && (found = url)
     end
+    found === nothing || return found
+    # Without a badge, a plain link to documentation, as in Makie's "Read the docs [here](…)".
+    # Julia's own manual is documentation of something else.
+    for m in eachmatch(r"\[([^\]]*)\]\((https?://[^)\s]+)\)", text)
+        label, url = m[1], String(m[2])
+        occursin(r"^https?://[^/]*julialang\.org"i, url) && continue
+        occursin(r"\bdocs?\b|documentation"i, label) || occursin(r"^https?://docs\."i, url) || continue
+        occursin(r"stable"i, url) && return url
+        found === nothing && (found = url)
+    end
     return found
 end
 
