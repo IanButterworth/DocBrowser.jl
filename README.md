@@ -1,6 +1,6 @@
 # DocBrowser.jl
 
-[![CI](https://github.com/IanButterworth/DocBrowser.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/IanButterworth/DocBrowser.jl/actions/workflows/CI.yml)
+[![CI](https://github.com/JuliaLang/DocBrowser.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/JuliaLang/DocBrowser.jl/actions/workflows/CI.yml)
 
 A full-window browser in the REPL for Julia's manual, the manuals of your packages, and the
 docstrings of every loaded module.
@@ -125,7 +125,7 @@ the `jldocs` command with Pkg's (experimental) app support, and put `~/.julia/bi
 `PATH`:
 
 ```
-pkg> app add https://github.com/IanButterworth/DocBrowser.jl
+pkg> app add https://github.com/JuliaLang/DocBrowser.jl
 ```
 
 ```
@@ -211,4 +211,4 @@ On other versions of Julia, as a package, it does almost everything that would, 
 - before Julia 1.14 it keeps to the terminal's 16 named colours, and some tips link to the top of
   a page rather than a heading.
 
-[Issue #2](https://github.com/IanButterworth/DocBrowser.jl/issues/2) compares the two in full.
+[Issue #2](https://github.com/JuliaLang/DocBrowser.jl/issues/2) compares the two in full.

@@ -10,7 +10,7 @@ version and the package versions of the project, and need no network, so prefer 
 and to memory for anything about Julia names.
 
 If `jldocs` is not on the `PATH`, look in `~/.julia/bin`. Otherwise install it with
-`julia -e 'using Pkg; Pkg.Apps.add(url="https://github.com/IanButterworth/DocBrowser.jl")'`,
+`julia -e 'using Pkg; Pkg.Apps.add(url="https://github.com/JuliaLang/DocBrowser.jl")'`,
 or, in an environment that has DocBrowser, use `julia --project -m DocBrowser` in its place.
 
 ## Commands
