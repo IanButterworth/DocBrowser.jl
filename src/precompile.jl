@@ -74,6 +74,10 @@ function precompile_workload()
         start_page(b.cat, 80, tip)
     end
     unloaded_page(b.cat, PkgId(UUID(UInt128(1)), "Example"), 80)
+    # Reading a package's manual, with its list of pages in the forms that builds write.
+    dir = pkgdir(@__MODULE__)
+    dir === nothing || own_or_fetched_docs(dir)
+    doc_page_list("pages = [\"Home\" => \"index.md\", \"Guide\" => joinpath.(\"guide\", [\"a.md\"]), joinpath(\"b\", \"c.md\")]")
     # The event loop, the screen set-up and the entry points.
     browse(terminal("jjlj\ty"); query = "sum")
     browse(terminal("q"), Base.Iterators)
@@ -81,6 +85,8 @@ function precompile_workload()
     LAST[] = nothing
     LAYOUT[] = :auto
     FIRST_OPEN[] = true
+    # what this machine has downloaded is for each session to find out, not the cache to keep
+    ANY_FETCHED[] = nothing
     nothing
 end
 

@@ -177,6 +177,8 @@ mutable struct Catalog
     text_matches::Matches
     section_matches::Matches
     manual_index::Tuple{Any,Dict{String,Int}} # the place of each page in `manual`, by its path
+    # where the manual of each package is, with or without a downloaded copy, for so many packages
+    docs_dirs::Tuple{Int,Vector{Tuple{String,PkgEntry}}}
 end
 
 function parse_uuids(deps)
@@ -325,7 +327,8 @@ function Catalog()
     bymod = IdDict{Module,PkgEntry}(p.mod => p for p in pkgs)
     return Catalog(pkgs, bymod, documented_bindings(), IdDict{Module,Vector{NameEntry}}(), nothing,
                    unloaded_deps(), nothing, manual_pages(), nothing, Dict{String,Vector{Heading}}(), Dict{String,Vector{Heading}}(), nothing,
-                   Dict{String,Any}(), nothing, Matches(), Matches(), Matches(), (nothing, Dict{String,Int}()))
+                   Dict{String,Any}(), nothing, Matches(), Matches(), Matches(), (nothing, Dict{String,Int}()),
+                   (0, Tuple{String,PkgEntry}[]))
 end
 
 function documented_bindings()

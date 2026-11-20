@@ -10,11 +10,22 @@ fetched_docs_rel(dir::String) = joinpath("scratchspaces", string(PkgId(@__MODULE
                                          basename(dirname(dir)), basename(dir))
 
 function fetched_docs_dir(dir::String)
+    any_fetched() || return nothing
     for depot in DEPOT_PATH
         d = joinpath(depot, fetched_docs_rel(dir))
         isdir(joinpath(d, "docs")) && return d
     end
     return nothing
+end
+
+# Whether any manual has been downloaded, in any depot. Every package without a manual of its
+# own asks, so this is looked up once, and again after a download.
+const ANY_FETCHED = Ref{Union{Nothing,Bool}}(nothing)
+function any_fetched()
+    a = ANY_FETCHED[]
+    a === nothing || return a
+    root = joinpath("scratchspaces", string(PkgId(@__MODULE__).uuid), "pkgdocs")
+    return ANY_FETCHED[] = any(depot -> isdir(joinpath(depot, root)), DEPOT_PATH)
 end
 
 # The manual of the package at `dir`: its own, or else the one downloaded for it.
@@ -71,6 +82,7 @@ function fetch_package_docs(id::PkgId, dir::String)
         end
         write(joinpath(tmp, "source.txt"), "$owner/$name $tag $docs\n")
         mv(tmp, target; force=true)
+        ANY_FETCHED[] = true
     catch
         rm(tmp; force=true, recursive=true)
         rethrow()

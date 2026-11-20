@@ -39,11 +39,15 @@ function package_docs(dir::String)
     generator = something(findfirst(g -> occursin(Regex("\\b$g\\b"), text), DOC_GENERATORS), 0)
     generator = generator == 0 ? "" : DOC_GENERATORS[generator]
     listed = Tuple{String,String,String}[] # file, title, group
-    # A build can have helper scripts with short lists of their own, so the longest list is the
-    # manual's.
-    for f in scripts
-        lists = doc_page_list(read(f, String))
-        lists === nothing || length(lists) > length(listed) && (listed = lists)
+    # The list is in the build script, or a file of its own, by their usual names. Failing those,
+    # a build can have helper scripts with short lists of their own, so the longest is the manual's.
+    usual = filter(f -> basename(f) in ("make.jl", "makedocs.jl", "pages.jl"), scripts)
+    for group in (usual, setdiff(scripts, usual))
+        for f in group
+            lists = doc_page_list(read(f, String))
+            lists === nothing || length(lists) > length(listed) && (listed = lists)
+        end
+        isempty(listed) || break
     end
     pages = ManualPage[]
     missing = String[]
@@ -134,34 +138,64 @@ end
 
 # The files an item of a page list names: a path, or a `joinpath` of literal parts, which a
 # build can apply to a list of names with a dot, and splat into the list around it.
-function list_paths(x)
-    x isa String && return [x]
+function list_paths(@nospecialize(x))::Union{Nothing,Vector{String}}
+    x isa String && return String[x]
+    x isa Expr || return nothing
     Meta.isexpr(x, :..., 1) && return list_paths(x.args[1])
-    if Meta.isexpr(x, :call) && x.args[1] === :joinpath && length(x.args) > 1 && all(a -> a isa String, x.args[2:end])
-        return [join(x.args[2:end], '/')]
+    if Meta.isexpr(x, :call) && x.args[1] === :joinpath && length(x.args) > 1
+        parts = literal_strings(x.args[2:end])
+        parts === nothing || return String[join(parts, '/')]
     end
     if Meta.isexpr(x, :., 2) && x.args[1] === :joinpath && Meta.isexpr(x.args[2], :tuple)
-        parts = x.args[2].args
-        if !isempty(parts) && all(a -> a isa String, parts[1:end-1]) && is_list(parts[end])
-            names = list_items(parts[end])
-            all(n -> n isa String, names) && return [join([parts[1:end-1]; n], '/') for n in names]
+        args = (x.args[2]::Expr).args
+        if !isempty(args) && is_list(args[end])
+            prefix = literal_strings(args[1:end-1])
+            names = literal_strings(list_items(args[end]::Expr))
+            (prefix === nothing || names === nothing) && return nothing
+            return String[join(String[prefix; n], '/') for n in names]
         end
     end
     return nothing
 end
 
+# The values of `v` as strings, when all of them are, as known types so that nothing that
+# packages add to joining strings changes what is compiled.
+function literal_strings(v::Vector{Any})
+    out = String[]
+    for a in v
+        a isa String || return nothing
+        push!(out, a)
+    end
+    return out
+end
+
 # The package that a page of its manual belongs to, if it is loaded.
 function page_package(cat::Catalog, path::String)
+    for (docs, p) in docs_dirs(cat)
+        startswith(path, docs) && return p
+    end
+    return nothing
+end
+
+# The directories that the manual of each package can be in: its `docs`, anywhere under which
+# a build can name the directory of its pages, and that of a downloaded copy, in any depot.
+# Each page of a manual asks, so they are worked out once for the packages there are.
+function docs_dirs(cat::Catalog)
+    n, dirs = cat.docs_dirs
+    n == length(cat.pkgs) && return dirs
+    dirs = Tuple{String,PkgEntry}[]
+    sep = Base.Filesystem.path_separator
     for p in cat.pkgs
         p.role === :extension && continue
         dir = pkgdir(p.mod)
         dir === nothing && continue
-        # anywhere under `docs`, since a build can name another directory than `src`
-        startswith(path, joinpath(dir, "docs") * Base.Filesystem.path_separator) && return p
-        fetched = fetched_docs_dir(dir)
-        fetched === nothing || startswith(path, joinpath(fetched, "docs") * Base.Filesystem.path_separator) && return p
+        push!(dirs, (joinpath(dir, "docs") * sep, p))
+        for depot in DEPOT_PATH
+            push!(dirs, (joinpath(depot, fetched_docs_rel(dir), "docs") * sep, p))
+        end
     end
-    return nothing
+    cat.docs_dirs = (length(cat.pkgs), dirs)
+    return dirs
 end
 
 # Why a package's manual here lacks pages of its online one, or `nothing`.

@@ -429,13 +429,20 @@ end
 
 # The blocks of code in `x`, in the order they are shown. Those that show without the face of
 # code, being empty or styled text, are left out.
-function code_nodes!(out::Vector{Markdown.Code}, x)
+function code_nodes!(out::Vector{Markdown.Code}, @nospecialize(x))
     if x isa Markdown.Code
         isempty(x.code) || x.language == "styled" || push!(out, x)
     elseif x isa Markdown.MD || x isa Markdown.Admonition || x isa Markdown.BlockQuote
-        foreach(y -> code_nodes!(out, y), x.content)
+        for y in x.content::Vector{Any}
+            code_nodes!(out, y)
+        end
     elseif x isa Markdown.List
-        foreach(item -> foreach(y -> code_nodes!(out, y), item), x.items)
+        for item in x.items
+            item isa AbstractVector || continue
+            for y in item
+                code_nodes!(out, y)
+            end
+        end
     end
     return out
 end
