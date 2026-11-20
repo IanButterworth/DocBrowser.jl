@@ -1,12 +1,11 @@
 # Reference
 
-The browser itself, [`DocBrowser.browse`](@ref), and [`DocBrowser.download_manual`](@ref) are
-on the [first page](@ref man-docbrowser).
+[`DocBrowser.browse`](@ref) and [`DocBrowser.download_manual`](@ref) are on the
+[first page](@ref man-docbrowser).
 
 ## Plain text
 
-The pages of the browser as plain text, for programs and AI agents, which the `jldocs` command
-also gives; see [For AI agents](agents.md).
+The functions behind `jldocs`; see [For AI agents](agents.md).
 
 ```@docs
 DocBrowser.lookup
