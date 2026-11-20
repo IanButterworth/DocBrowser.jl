@@ -46,8 +46,16 @@ function manual_source(dir::String=manual_dir())
     return isfile(file) ? strip(read(file, String)) : nothing
 end
 
-downloaded_manual_dir() = joinpath(first(DEPOT_PATH), "scratchspaces", string(PkgId(@__MODULE__).uuid),
-                                   "manual", julia_ref())
+# Where the manual was downloaded to, in any depot, or else where to download it. A Pkg app
+# runs with a depot of its own first, ahead of the one the browser downloaded the manual to.
+function downloaded_manual_dir()
+    rel = joinpath("scratchspaces", string(PkgId(@__MODULE__).uuid), "manual", julia_ref())
+    for depot in DEPOT_PATH
+        dir = joinpath(depot, rel)
+        isfile(joinpath(dir, "pages.toml")) && return dir
+    end
+    return joinpath(first(DEPOT_PATH), rel)
+end
 
 # The page lists of `doc/make.jl`, which are literal vectors of paths, as `pages.toml` has them.
 function make_page_lists(src::AbstractString)

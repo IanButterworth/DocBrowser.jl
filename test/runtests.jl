@@ -1096,6 +1096,21 @@ end
             @test occursin("the DocsFixture manual", text(api)) && occursin("Missing here: tutorial.md", text(api))
             @test NameTarget(M, :shout) in [s.target for s in api.spots]
             @test occursin("2 pages", text(module_page(cat, M, 80)))
+            # In plain text, the manual's pages have addresses that `lookup` and `find_docs` know.
+            hb = Browser(fake_terminal(""), cat)
+            DocBrowser.HEADLESS[] = hb
+            DocBrowser.PACKAGE_MANUALS[] = nothing
+            try
+                pm = only(m for m in DocBrowser.package_manuals(hb) if m.name == "DocsFixture")
+                @test pm.refs == ["DocsFixture/index", "DocsFixture/man/api"]
+                @test occursin("DocsFixture/man/api  API", DocBrowser.lookup("DocsFixture/"))
+                api_page = DocBrowser.lookup("DocsFixture/man/api")
+                @test startswith(api_page, "# DocsFixture/man/api\nPath: $(docs.pages[2].path)\n")
+                @test occursin("DocsFixture/man/api  manual of DocsFixture: API", DocBrowser.find_docs("api"))
+            finally
+                DocBrowser.HEADLESS[] = nothing
+                DocBrowser.PACKAGE_MANUALS[] = nothing
+            end
             # The names pane lists the pages before the names, and picking one shows it.
             b = Browser(fake_terminal(""), cat)
             DocBrowser.show_module!(b, M)
@@ -2025,6 +2040,79 @@ end
     b.fetch_note = "Downloading the manuals of Foo…"
     @test occursin("Downloading the manuals of Foo…", strip_ansi(frame(b)[end]))
     @test !DocBrowser.autodownload_enabled()
+end
+
+@testset "plain text for agents" begin
+    # A page, with its links numbered and listed in a form that lookup takes again.
+    page = DocBrowser.lookup("Fixture.documented")
+    @test startswith(page, "# Main.Fixture.documented") && occursin("Calls documented_public[1]", page)
+    @test occursin("[1] Main.Fixture.documented_public", page)
+    @test occursin("Public but not exported", DocBrowser.lookup("Main.Fixture.documented_public"))
+    @test occursin("Nothing is called", DocBrowser.lookup("Fixture.nosuchname"))
+    # An example keeps its short lines, which have only the place that copies the code.
+    @test occursin("    julia> 1 + 1\n    2\n", DocBrowser.lookup("Shape"))
+    # The outline of a manual page, and one of its sections.
+    outline = DocBrowser.lookup("manual/arrays"; outline=true)
+    k = parse(Int, match(r"§(\d+) Broadcasting\n", outline)[1])
+    section = DocBrowser.lookup("manual/arrays"; section=k)
+    @test occursin("element-by-element", section) && !occursin("Array literals\n", section)
+    # Each answer says where its file is, to be read directly: the page's, and that of a linked page.
+    arrays = joinpath(DocBrowser.manual_dir(), "manual", "arrays.md")
+    @test occursin("\nPath: $arrays\n", section)
+    @test occursin(r"\[\d+\] manual/[\w-]+#[\w-]+  \S+\.md\n", section)
+    sortpage = DocBrowser.lookup("Base.sort!")
+    @test occursin(r"\nPath: \S+sort\.jl:\d+\n", sortpage) && !occursin("~/", sortpage)
+    # The mark of a link in code goes after the code, so that the code stays as written.
+    @test occursin(r"lt\(by\(x\), by\(y\)\)\[\d+\]", sortpage)
+    # In brief, each of the docstrings, though they come from one module.
+    brief = DocBrowser.lookup("Base.sort!"; brief=true)
+    @test occursin("sort!(A; dims", brief) && occursin("sort!(v; alg", brief)
+    # Code with a space after the name is a command or an expression, not a name to link.
+    @test DocBrowser.resolve_ref("mv a b", Main, Catalog()) === nothing
+    @test DocBrowser.resolve_ref("float = false", Main, Catalog()) === nothing
+    @test DocBrowser.resolve_ref("@time f()", Main, Catalog()) !== nothing
+    @test DocBrowser.lookup("manual/arrays#Broadcasting") == section
+    # Searching, and the names of a module.
+    @test occursin("Base.sort!  function, exported", DocBrowser.find_docs("sort!"))
+    names = DocBrowser.list_names(Fixture)
+    @test occursin("documented  exported", names) && !occursin("helper", names)
+    @test occursin("helper  internal", DocBrowser.list_names("Fixture"; internal=true))
+    # The command line.
+    out = mktemp() do path, io
+        code = redirect_stdout(() -> DocBrowser.main(["--section", "1", "show", "Base.sort!"]), io)
+        close(io)
+        (code, read(path, String))
+    end
+    @test out[1] == 0 && startswith(out[2], "# Base.sort!  (Julia $VERSION)")
+    @test redirect_stderr(() -> DocBrowser.main(String[]), devnull) == 1
+    @test redirect_stdout(() -> DocBrowser.main(["--help"]), devnull) == 0
+    # An option the command does not have, or a command that does not exist, is an error.
+    for args in (["show", "x", "--sectoin", "2"], ["names", "x", "--text"], ["show", "x", "--section", "x"], ["frob", "x"])
+        @test redirect_stderr(() -> DocBrowser.main(args), devnull) == 2
+    end
+    # Finding nothing is said by the exit code too.
+    @test redirect_stdout(() -> DocBrowser.main(["show", "Fixture.nosuchname"]), devnull) == 1
+    DocBrowser.CLI[] = false
+end
+
+@testset "plain text: the manual, and docstrings from several modules" begin
+    @test occursin("\n  manual/arrays  ", DocBrowser.lookup("manual"))
+    @eval module DocA
+        "    f(x)\n\nA's f.\n\n# Notes\n\nMore about A."
+        f(x) = 1
+    end
+    @eval module DocB
+        import ..DocA
+        "    f(::String)\n\nB's method of f.\n\n# Notes\n\nMore about B."
+        DocA.f(::String) = 2
+    end
+    # Each docstring says which module it is from, and so does each heading in the outline.
+    page = DocBrowser.lookup("DocA.f")
+    @test occursin(r"From Main.DocA\[\d+\]:", page) && occursin(r"From Main.DocB\[\d+\]:", page)
+    @test occursin("§1 Notes  (from Main.DocA)\n§2 Notes  (from Main.DocB)", DocBrowser.lookup("DocA.f"; outline=true))
+    # In brief, the signature and first paragraph of each.
+    brief = DocBrowser.lookup("DocA.f"; brief=true)
+    @test occursin("A's f.", brief) && occursin("B's method of f.", brief) && !occursin("More about", brief)
 end
 
 foreach((r, v) -> r[] = v, SETTINGS, SAVED)

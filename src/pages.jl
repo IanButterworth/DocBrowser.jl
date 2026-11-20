@@ -273,6 +273,9 @@ spans which merely mention a variable do not become links.
 function resolve_ref(text::AbstractString, ctx::Module, cat::Catalog)
     s = strip(text)
     i = findfirst(in("({[ "), s)
+    # A name then a space is a command or an expression, as in `mv a b` or `float = false`,
+    # unless it is a macro and what it is given.
+    i === nothing || s[i] != ' ' || startswith(s, '@') || return nothing
     i === nothing || (s = s[1:prevind(s, i)])
     isempty(s) && return nothing
     parts = split(s, '.')
@@ -533,6 +536,26 @@ List methods `ms` by signature. Each links to its definition.
 # The Markdown of each docstring. Packages add their own ways to format docstrings.
 parse_docs(results::Vector{DocStr}) = Any[dynamic(REPL.parsedoc)(d) for d in results]
 
+# The docstrings of a name, set apart: each after a line that says which module it is from when
+# they come from several, as when a package adds a method to a function of Base, or else after
+# a rule.
+function labelled_docs(results::Vector{DocStr})
+    docs = parse_docs(results)
+    length(docs) > 1 || return docs
+    mods = [get(d.data, :module, nothing) for d in results]
+    labels = length(unique(mods)) > 1
+    out = Any[]
+    for (i, (m, md)) in enumerate(zip(mods, docs))
+        if labels && m isa Module
+            push!(out, Markdown.MD(Any[Markdown.Paragraph(Any["From ", Markdown.Code(display_name(m)), ":"])]))
+        elseif i > 1
+            push!(out, Markdown.MD(Any[Markdown.HorizontalRule()]))
+        end
+        push!(out, md)
+    end
+    return out
+end
+
 function add_methods!(pb::PageBuilder, title::String, ms)
     isempty(ms) && return
     heading!(pb, string(title, " (", length(ms), ")"))
@@ -659,7 +682,7 @@ function entry_page(cat::Catalog, e::NameEntry, width::Int, flags::Set{Symbol}=S
     end
     rule!(pb)
     b = Binding(e.mod, e.name)
-    md = isempty(results) ? dynamic(REPL.doc)(b) : dynamic(Base.Docs.catdoc)(parse_docs(results)...)
+    md = isempty(results) ? dynamic(REPL.doc)(b) : dynamic(Base.Docs.catdoc)(labelled_docs(results)...)
     trimmed = false
     if md isa Markdown.MD
         brief, trimmed = REPL._trimdocs(md, true)
@@ -1216,7 +1239,8 @@ function unloaded_page(cat::Catalog, id::PkgId, width::Int, then::String="")
     stdlib = is_stdlib(id)
     dir = unloaded_dir(id)
     addline!(pb)
-    addline!(pb, "  ", (isempty(then) ? id.name : then, :REPL_DocBrowser_title))
+    title = isempty(then) ? id.name : startswith(then, id.name * ".") ? then : "$(id.name).$then"
+    addline!(pb, "  ", (title, :REPL_DocBrowser_title))
     addline!(pb, "  ", (stdlib ? "standard library · not loaded" : "direct dependency · not loaded", :REPL_DocBrowser_dim))
     dir === nothing || addline!(pb, "  ", (Base.contractuser(dir), :REPL_DocBrowser_dim))
     add_links!(pb, id, dir, stdlib ? :stdlib : :direct)
