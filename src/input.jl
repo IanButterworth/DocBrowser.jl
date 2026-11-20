@@ -55,6 +55,10 @@ const Event = Union{KeyEvent,MouseEvent,PasteEvent,SchemeEvent,LegacyMouseEvent}
 
 const SHIFT, ALT, CTRL = 1, 2, 4
 
+# How long the rest of a sequence can take to arrive once it has started. A terminal sends a
+# whole sequence at once, so a longer gap means separate keys, such as Escape and then `[`.
+const SEQUENCE_WAIT = Ref(0.03)
+
 function wait_bytes(io::IO, timeout::Float64)
     bytesavailable(io) > 0 && return true
     # Asking whether the input has ended waits for the next byte without taking it. Once the
@@ -86,10 +90,10 @@ end
 
 # What follows an Escape.
 function read_escape(io::IO)
-    wait_bytes(io, 0.03) || return KeyEvent(:escape)
+    wait_bytes(io, SEQUENCE_WAIT[]) || return KeyEvent(:escape)
     c2 = read(io, Char)
     # A terminal sends a whole sequence at once. With nothing after it, this is Alt and a key.
-    if c2 in "[O]P" && wait_bytes(io, 0.03)
+    if c2 in "[O]P" && wait_bytes(io, SEQUENCE_WAIT[])
         c2 == '[' && return read_csi(io)
         c2 == 'O' && return read_ss3(io)
         return skip_string(io)
@@ -129,7 +133,7 @@ function skip_string(io::IO)
         c = read(io, Char)
         c == '\a' && break
         if c == '\e'
-            wait_bytes(io, 0.03) || return nothing
+            wait_bytes(io, SEQUENCE_WAIT[]) || return nothing
             read(io, Char) == '\\' && break
         end
         position(buf) < 160 && write(buf, c)
@@ -181,7 +185,7 @@ end
 # is the start of whatever came next.
 function read_x10(io::IO)
     for _ in 1:3
-        wait_bytes(io, 0.03) || break
+        wait_bytes(io, SEQUENCE_WAIT[]) || break
         peek(io, UInt8) == 0x1b && break
         read(io, UInt8)
     end
