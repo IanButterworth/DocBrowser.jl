@@ -30,7 +30,5 @@ jobs:
       - uses: JuliaRegistries/TagBot@v1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-      - uses: JuliaRegistries/TagBot@v1
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          subdir: lib/DocBrowserCore
+          # a tag pushed with the deploy key, unlike with the token, starts the docs build
+          ssh: ${{ secrets.DOCUMENTER_KEY }}

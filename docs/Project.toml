@@ -1,0 +1,9 @@
+[deps]
+DocBrowser = "208986ce-fd7f-47a4-b86f-e50b7a34e96d"
+Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+
+[sources]
+DocBrowser = {path = ".."}
+
+[compat]
+Documenter = "1"

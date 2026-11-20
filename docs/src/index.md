@@ -9,7 +9,11 @@ The manual is read from the Markdown it is written in, which Julia installs in
 `share/doc/julia/src`. The standard libraries ship their manuals with their source, and so do
 most packages, in `docs/src`, in the order that `docs/make.jl` gives. Pages that a package's
 documentation build writes, such as Literate tutorials, are not in its source, and its pages
-say so, with a link to its online documentation.
+say so, with a link to its online documentation. A package in a subdirectory of a repository,
+such as GLMakie in Makie.jl, is installed without a manual kept elsewhere in the repository; the
+browser downloads it in the background from the release of the installed version, unless the
+`JULIA_DOCBROWSER_AUTODOWNLOAD` environment variable is `no`. [`DocBrowser.explain_docs`](@ref)
+says where the browser looked for a package's manual, and why it found no more.
 
 The browser has three panes:
 
@@ -28,13 +32,14 @@ The browser has three panes:
 
 Names mentioned in a docstring are links, and so are mentions of packages such as
 `Example.jl`. Long pages start with links to their headings, extended help is folded away
-until you press `x`, and each example has a link that pastes its code at the `julia>` prompt.
+until you press `x`, and a `⧉` beside a block of code copies it.
 
 Use the arrow keys (or `h` `j` `k` `l`) to move, Enter to open, Tab to step through the links
 of a page, and Backspace to go back. Press `/` to search: names come first, then the manual and the
 text of docstrings, and names in the manuals of packages that are not loaded yet, which load
 when picked. Ctrl-T narrows the search to names, then to text. Press `y` to close the browser and
-put the name being viewed at the `julia>` prompt, `e` to open the source of the selected link
+put the name being viewed at the `julia>` prompt, or with the cursor in a block of Julia code,
+that code; `e` to open the source of the selected link
 or name in your editor (set by `JULIA_EDITOR`), `w` to change the layout, and `?` to see every
 key. In terminals that support it, you can click on anything, scroll with the mouse wheel, and
 use the mouse's back and forward buttons. Right-click, Alt-click or Ctrl-click opens the source

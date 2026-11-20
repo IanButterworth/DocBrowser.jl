@@ -1,5 +1,7 @@
 # DocBrowser.jl
 
+[![Stable](https://img.shields.io/badge/docs-stable-blue.svg)](https://JuliaLang.github.io/DocBrowser.jl/stable/)
+[![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://JuliaLang.github.io/DocBrowser.jl/dev/)
 [![CI](https://github.com/JuliaLang/DocBrowser.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/JuliaLang/DocBrowser.jl/actions/workflows/CI.yml)
 
 A full-window browser in the REPL for Julia's manual, the manuals of your packages, and the
