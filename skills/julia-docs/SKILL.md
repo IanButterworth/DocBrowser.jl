@@ -17,15 +17,20 @@ or, in an environment that has DocBrowser, use `julia --project -m DocBrowser` i
 
 Run them in the project's directory, or pass `--project PATH`.
 
-- `docbrowser find <words>`: names and manual sections that match, best first, one a line.
-  Each line starts with something `show` takes. `--text` also searches the text of docstrings
-  and of the manual, for when the name is not known.
+- `docbrowser find <words>`: names, and sections of Julia's manual and of the manuals of the
+  project's packages, that match, best first, one a line. Each line starts with something
+  `show` takes, and a section of a manual ends with its file. `--text` also searches the text
+  of docstrings and manuals, which is done anyway when nothing else matches.
 - `docbrowser show <query>`: one page. A query is a name (`Base.sort!`, `DataFrames.select`),
-  a module (`Base.Iterators`), or a place in the manual (`manual/arrays#Broadcasting`,
-  `stdlib/Random`, `base/sort`). `show manual` lists the pages of the manual. The first line
-  gives the version the page is about.
+  a module (`Base.Iterators`), a place in Julia's manual (`manual/arrays#Broadcasting`,
+  `stdlib/Random`, `base/sort`), or a page of a package's manual
+  (`GLMakie/explanations/figure#The-px_per_unit-factor`). `show manual` lists the pages of
+  Julia's manual, and `show GLMakie/` those of a package's. The first line gives the version
+  the page is about.
 - `docbrowser names <module>`: the names of a module, by kind, and whether each is exported
   or public. `--internal` adds the others.
+- The exit code is 0 for an answer, 1 when nothing was found, and 2 for a mistake in the
+  command, such as an option it does not take.
 
 ## Reading pages without wasting context
 
@@ -35,7 +40,7 @@ Run them in the project's directory, or pass `--project PATH`.
   signature and first paragraph of each docstring. When the docstrings come from several
   modules, as when a package adds a method to a function of `Base`, each starts with a
   `From Module:` line, and the outline says which one each heading is in.
-- A mistyped option is an error, with exit code 2; it is never silently ignored.
+- A package's page says how many pages its manual has, and `--outline` lists them.
 - Links in a page end in a number, as in `sortslices[2]`. The `Links:` list at the end gives
   what each number leads to, in a form `show` takes, and for a page of a manual, its file.
 - Each page's `Path:` line gives the file it comes from: the Markdown of a manual page, or the
@@ -48,6 +53,10 @@ Run them in the project's directory, or pass `--project PATH`.
 ## Packages that are not loaded
 
 The project's packages are not loaded by default, because loading runs their code. Until then,
-`show` gives what the package's source documents, such as its README, and `find` does not see
-its names. Add `--load` to `show` or `names` to load the package and read its docstrings. Only
-do this for packages the project already depends on.
+`show` gives what the package's source documents, such as its README and manual, and `find`
+does not see its names, which it says. Add `--load` to `show`, `find` or `names` to load the
+package, or with `find` all of the project's packages, and read their docstrings. Only do this
+for packages the project already depends on.
+
+What is loaded also decides what a function's page shows: `show Base.sort` gives Base's
+docstrings, and `show DataFrames.sort --load` adds the method that DataFrames documents.

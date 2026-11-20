@@ -1096,6 +1096,21 @@ end
             @test occursin("the DocsFixture manual", text(api)) && occursin("Missing here: tutorial.md", text(api))
             @test NameTarget(M, :shout) in [s.target for s in api.spots]
             @test occursin("2 pages", text(module_page(cat, M, 80)))
+            # In plain text, the manual's pages have addresses that `lookup` and `find_docs` know.
+            hb = Browser(fake_terminal(""), cat)
+            DocBrowser.HEADLESS[] = hb
+            DocBrowser.PACKAGE_MANUALS[] = nothing
+            try
+                pm = only(m for m in DocBrowser.package_manuals(hb) if m.name == "DocsFixture")
+                @test pm.refs == ["DocsFixture/index", "DocsFixture/man/api"]
+                @test occursin("DocsFixture/man/api  API", DocBrowser.lookup("DocsFixture/"))
+                api_page = DocBrowser.lookup("DocsFixture/man/api")
+                @test startswith(api_page, "# DocsFixture/man/api\nPath: $(docs.pages[2].path)\n")
+                @test occursin("DocsFixture/man/api  manual of DocsFixture: API", DocBrowser.find_docs("api"))
+            finally
+                DocBrowser.HEADLESS[] = nothing
+                DocBrowser.PACKAGE_MANUALS[] = nothing
+            end
             # The names pane lists the pages before the names, and picking one shows it.
             b = Browser(fake_terminal(""), cat)
             DocBrowser.show_module!(b, M)
@@ -2047,6 +2062,15 @@ end
     @test occursin(r"\[\d+\] manual/[\w-]+#[\w-]+  \S+\.md\n", section)
     sortpage = DocBrowser.lookup("Base.sort!")
     @test occursin(r"\nPath: \S+sort\.jl:\d+\n", sortpage) && !occursin("~/", sortpage)
+    # The mark of a link in code goes after the code, so that the code stays as written.
+    @test occursin(r"lt\(by\(x\), by\(y\)\)\[\d+\]", sortpage)
+    # In brief, each of the docstrings, though they come from one module.
+    brief = DocBrowser.lookup("Base.sort!"; brief=true)
+    @test occursin("sort!(A; dims", brief) && occursin("sort!(v; alg", brief)
+    # Code with a space after the name is a command or an expression, not a name to link.
+    @test DocBrowser.resolve_ref("mv a b", Main, Catalog()) === nothing
+    @test DocBrowser.resolve_ref("float = false", Main, Catalog()) === nothing
+    @test DocBrowser.resolve_ref("@time f()", Main, Catalog()) !== nothing
     @test DocBrowser.lookup("manual/arrays#Broadcasting") == section
     # Searching, and the names of a module.
     @test occursin("Base.sort!  function, exported", DocBrowser.find_docs("sort!"))
@@ -2063,9 +2087,11 @@ end
     @test redirect_stderr(() -> DocBrowser.main(String[]), devnull) == 1
     @test redirect_stdout(() -> DocBrowser.main(["--help"]), devnull) == 0
     # An option the command does not have, or a command that does not exist, is an error.
-    for args in (["show", "x", "--sectoin", "2"], ["find", "x", "--load"], ["show", "x", "--section", "x"], ["frob", "x"])
+    for args in (["show", "x", "--sectoin", "2"], ["names", "x", "--text"], ["show", "x", "--section", "x"], ["frob", "x"])
         @test redirect_stderr(() -> DocBrowser.main(args), devnull) == 2
     end
+    # Finding nothing is said by the exit code too.
+    @test redirect_stdout(() -> DocBrowser.main(["show", "Fixture.nosuchname"]), devnull) == 1
     DocBrowser.CLI[] = false
 end
 

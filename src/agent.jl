@@ -6,6 +6,8 @@ const HEADLESS = Ref{Any}(nothing)
 const CLI = Ref(false)
 # Why Julia's manual is missing, if it could not be downloaded.
 const MANUAL_NOTE = Ref{Union{Nothing,String}}(nothing)
+# Whether the last answer found what was asked for, which the command line's exit code says.
+const FOUND = Ref(true)
 
 function headless_browser()
     b = HEADLESS[]
@@ -53,10 +55,14 @@ and then its docstrings can be read.
 """
 function lookup(query::AbstractString; outline::Bool=false, section::Int=0, brief::Bool=false,
                 width::Int=100, context::Module=Main, load::Bool=false)
+    FOUND[] = true
     b = headless_browser()
     strip(query) in ("manual", "docs") && return manual_index(b)
-    t = agent_target(b.cat, String(query), context)
+    place = package_place(b, String(query))
+    place isa PackageManual && return package_manual_index(place)
+    t = something(place, agent_target(b.cat, String(query), context), Some(nothing))
     if t === nothing
+        FOUND[] = false
         note = MANUAL_NOTE[] === nothing ? "" : "\n" * MANUAL_NOTE[]
         return "Nothing is called $(repr(query)); $(search_hint()).$note\n"
     end
@@ -67,27 +73,42 @@ function lookup(query::AbstractString; outline::Bool=false, section::Int=0, brie
         return invokelatest(lookup, query; outline, section, brief, width, context)
     end
     key, k = page_key(b.cat, t)
-    key === nothing && return "There is no page for $(repr(query)).\n"
+    key === nothing && (FOUND[] = false; return "There is no page for $(repr(query)).\n")
     push!(get!(Set{Symbol}, b.flags, key), :extended)
     p = page(b, key, width)
     io = IOBuffer()
+    # the address of the page, without the file that a link to it is given with
     title = something(place_ref(b.cat, key, 0), link_ref(b, key, key), key_title(b, key))
+    title = String(first(split(title, "  ")))
     v = page_version(key)
+    pkgpage = key isa ManualTarget ? package_page(b, key.path) : nothing
+    pkgpage === nothing || pkgpage[1].version === nothing || (v = "$(pkgpage[1].name) $(pkgpage[1].version)")
     println(io, "# ", title, v === nothing ? "" : "  ($v)")
     path = page_path(key, p)
     path === nothing || println(io, "Path: ", path)
     key isa LoadTarget && println(io, "(", key.id.name, " is not loaded, so its docstrings cannot be read. ",
                                   "To load it, which runs its code, ", load_hint(), ".)")
+    # A package's manual, whose pages are listed in the browser with its names.
+    name = key isa ModuleTarget && parentmodule(key.mod) === key.mod ? String(nameof(key.mod)) :
+           key isa LoadTarget && isempty(key.then) ? key.id.name : nothing
+    manual = name === nothing ? nothing : findfirst(m -> m.name == name, package_manuals(b))
+    manual === nothing || println(io, "(Its manual has $(length(package_manuals(b)[manual].pages)) pages: ",
+                                  CLI[] ? "`docbrowser show $name/`" : "`lookup(\"$name/\")`", " lists them.)")
     if outline
         for (i, li) in enumerate(p.headings)
             from = docstring_from(p, li)
             println(io, "§", i, " ", strip(String(p.lines[li])), from === nothing ? "" : "  (from $from)")
         end
         isempty(p.headings) && println(io, "(this page has no headings)")
+        if manual !== nothing
+            m = package_manuals(b)[manual]
+            println(io, "\nIts manual:")
+            foreach((pg, ref) -> println(io, "  ", ref, "  ", pg.title), m.pages, m.refs)
+        end
         return String(take!(io))
     end
     section == 0 && (section = k)
-    section == 0 || section in eachindex(p.headings) || return "This page has no section $section.\n"
+    section == 0 || section in eachindex(p.headings) || (FOUND[] = false; return "This page has no section $section.\n")
     part = section == 0 ? eachindex(p.lines) :
         (p.headings[section]:(section < length(p.headings) ? p.headings[section+1] - 1 : length(p.lines)))
     total = length(part)
@@ -106,9 +127,12 @@ function lookup(query::AbstractString; outline::Bool=false, section::Int=0, brie
             short = string(contractuser(s.target.file), ':', s.target.line)
             text = replace(text, (occursin(short, text) ? short : string(basename(s.target.file), ':', s.target.line)) => full)
         end
-        marks = Tuple{Int,String}[(last(s.cols), "[$(numbers[i])]") for (i, s) in enumerate(p.spots)
+        marks = Tuple{Int,String}[(mark_col(p.lines[li], s.cols), "[$(numbers[i])]") for (i, s) in enumerate(p.spots)
                                   if s.line == li && haskey(numbers, i)]
-        println(io, rstrip(insert_marks(text, marks)))
+        # on a line of code, the marks go at its end, away from the code
+        code = is_code_line(p.lines[li]) && !isempty(marks)
+        line = code ? rstrip(text) * "  " * join(last.(sort!(marks)), "") : insert_marks(text, marks)
+        println(io, rstrip(line))
     end
     brief && length(lines) < total && println(io, "\n(", total - length(lines), " more lines: drop `--brief`",
                                               " for all of it, or read one part with `--outline` and `--section`)")
@@ -175,16 +199,23 @@ function brief_lines(p::Page, lines::Vector{Int})
     # the header of a page ends with a rule; each docstring after it starts a part
     rule = findfirst(li -> occursin(r"^\s*─{8,}\s*$", String(p.lines[li])), lines)
     rule === nothing || append!(keep, lines[1:rule])
-    taking, prose = true, false
+    taking, prose, contents = true, false, false
     for li in lines[something(rule, 0)+1:end]
         text = String(p.lines[li])
-        if occursin(r"^\s*From (\S+):$", text)
+        blank = isempty(strip(text))
+        # the list of contents, which can take more than one line, is not a paragraph
+        startswith(lstrip(text), "Contents ") && (contents = true)
+        blank && (contents = false)
+        # each docstring after the first starts after a label of its module, or a rule
+        if occursin(r"^\s*From (\S+):$", text) || occursin(r"^\s*─{8,}\s*$", text)
             taking, prose = true, false
-            # the blank line that sets the label apart from the docstring before
+            # the blank line that sets it apart from the docstring before
             li - 1 in lines && !(li - 1 in keep) && isempty(strip(String(p.lines[li-1]))) && push!(keep, li - 1)
-        elseif taking && isempty(strip(text)) && prose
+        elseif taking && blank && prose
             taking = false
-        elseif taking && !isempty(strip(text)) && !is_code_line(p.lines[li])
+        elseif taking && !blank && !contents && !is_code_line(p.lines[li]) &&
+               !(li in p.headings) && !occursin(r"^\s*[≡=\-]{3,}\s*$", text)
+            # the first paragraph of text, not a heading or the line under one
             prose = true
         end
         taking && push!(keep, li)
@@ -209,15 +240,121 @@ function manual_index(b::Browser)
     return String(take!(io))
 end
 
-"""
-    DocBrowser.find_docs(query; text=false, internal=false, limit=20) -> String
+# The manual of a package, read from its source or downloaded, with the address of each page:
+# the package's name, then the page's path under the directory of the manual's pages without
+# `.md`, as in `GLMakie/explanations/backends/glmakie`.
+struct PackageManual
+    name::String
+    version::Union{Nothing,String}
+    pages::Vector{ManualPage}
+    refs::Vector{String}
+end
 
-Names and sections of the manuals that match `query`, best first, one a line, each in a form
-that [`lookup`](@ref) takes. With `text`, the words are looked for in docstrings and in the
-text of the manuals too, not only in names and headings.
+# The manuals of the packages the browser lists, loaded and not, that have one. Every link to a
+# page of a manual asks, so they are found once for each browser.
+const PACKAGE_MANUALS = Ref{Any}(nothing)
+function package_manuals(b::Browser)
+    c = PACKAGE_MANUALS[]
+    c isa Tuple && c[1] === b && return c[2]::Vector{PackageManual}
+    out = find_package_manuals(b)
+    PACKAGE_MANUALS[] = (b, out)
+    return out
+end
+
+function find_package_manuals(b::Browser)
+    out = PackageManual[]
+    seen = Set{String}()
+    add(name, dir, docs) = begin
+        (dir === nothing || isempty(docs.pages) || name in seen) && return
+        push!(seen, name)
+        root = common_dir(String[pg.path for pg in docs.pages])
+        refs = [string(name, '/', replace(chopsuffix(relpath(pg.path, root), ".md"), '\\' => '/')) for pg in docs.pages]
+        v = installed_version(dir)
+        push!(out, PackageManual(name, v isa String ? v : nothing, docs.pages, refs))
+    end
+    # a standard library's manual is part of Julia's, at `stdlib/…`
+    for p in b.cat.pkgs
+        p.role in (:project, :direct, :indirect) && !is_stdlib(p.id) || continue
+        add(p.id.name, pkgdir(p.mod), package_docs(b.cat, p.mod))
+    end
+    for id in b.cat.unloaded
+        is_stdlib(id) || add(id.name, unloaded_dir(id), unloaded_docs(b.cat, id))
+    end
+    return out
+end
+
+installed_version(dir::String) = get(Base.parsed_toml(joinpath(dir, "Project.toml")), "version", nothing)
+
+# The directory that all of `paths` are in.
+function common_dir(paths::Vector{String})
+    root = dirname(paths[1])
+    for p in paths
+        while !startswith(p, root * Base.Filesystem.path_separator) && dirname(root) != root
+            root = dirname(root)
+        end
+    end
+    return root
+end
+
+# What an address in a package's manual names: its page, at a heading after `#`, or the whole
+# manual for `GLMakie/` or `GLMakie/manual`. `nothing` when it is not one.
+function package_place(b::Browser, query::String)
+    m = match(r"^([A-Za-z_]\w*)/([^#]*?)(?:#(.*))?$", strip(query))
+    m === nothing && return nothing
+    name, page, anchor = String(m[1]), chopsuffix(strip(String(m[2]), '/'), ".md"), something(m[3], "")
+    i = findfirst(pm -> pm.name == name, package_manuals(b))
+    i === nothing && return nothing
+    pm = package_manuals(b)[i]
+    page in ("", "manual") && return pm
+    j = findfirst(==("$name/$page"), pm.refs)
+    return j === nothing ? nothing : ManualTarget(pm.pages[j].path, String(anchor))
+end
+
+# The package manual a page belongs to, and the page's address, or `nothing`.
+function package_page(b::Browser, path::String)
+    for m in package_manuals(b)
+        i = findfirst(pg -> pg.path == path, m.pages)
+        i === nothing || return m, m.refs[i]
+    end
+    return nothing
+end
+
+# The pages of a package's manual, each with what `lookup` takes for it.
+function package_manual_index(m::PackageManual)
+    io = IOBuffer()
+    println(io, "# The manual of ", m.name, m.version === nothing ? "" : "  ($(m.name) $(m.version))")
+    group = nothing
+    for (pg, ref) in zip(m.pages, m.refs)
+        if pg.group != group
+            group = pg.group
+            isempty(group) || println(io, "\n", group)
+        end
+        println(io, "  ", ref, "  ", pg.title, "  ", pg.path)
+    end
+    return String(take!(io))
+end
+
 """
-function find_docs(query::AbstractString; text::Bool=false, internal::Bool=false, limit::Int=20)
+    DocBrowser.find_docs(query; text=false, internal=false, limit=20, load=false) -> String
+
+Names, and sections of Julia's manual and of the manuals of the project's packages, that match
+`query`, best first, one a line, each in a form that [`lookup`](@ref) takes, and for a section
+of a manual, its file. With `text`, the words are looked for in docstrings and in the text of
+the manuals too, not only in names and headings; that is done anyway when nothing else matches.
+
+The names of packages that are not loaded are not known until they are, which `load` does,
+running their code. Their manuals are searched either way.
+"""
+function find_docs(query::AbstractString; text::Bool=false, internal::Bool=false, limit::Int=20, load::Bool=false)
+    FOUND[] = true
     b = headless_browser()
+    if load && !isempty(b.cat.unloaded)
+        for id in b.cat.unloaded
+            @attempt Core.eval(Main, :(import $(Symbol(id.name)))) nothing
+        end
+        HEADLESS[] = nothing # the catalog was made before the packages were loaded
+        return invokelatest(find_docs, query; text, internal, limit)
+    end
     io = IOBuffer()
     names = search(b.cat, query; internal, limit)
     text && (names = unique!(vcat(names, search_text(b.cat, query; internal, limit))))
@@ -234,8 +371,51 @@ function find_docs(query::AbstractString; text::Bool=false, internal::Bool=false
         # and the file, which can be read directly, unless that is what `show` takes
         println(io, ref, "  manual: ", hit_title(b.cat, h), startswith(ref, h.path) ? "" : "  " * h.path)
     end
+    for (ref, name, title, path) in first(search_package_manuals(b, query; text), limit)
+        println(io, ref, "  manual of ", name, ": ", title, "  ", path)
+    end
     out = String(take!(io))
-    return isempty(out) ? "Nothing matches $(repr(query)).\n" : out
+    if isempty(out) && !text
+        # a phrase, rather than a name or the words of a heading, is more likely in the text
+        out = find_docs(query; internal, limit, text=true)
+        FOUND[] && (out = "(No name or heading matches, so these are from the text of the docs.)\n" * out)
+        return out
+    end
+    if isempty(out)
+        FOUND[] = false
+        out = "Nothing matches $(repr(query)).\n"
+    end
+    # what could not be searched, so that a miss is not taken for an answer
+    unloaded = [id.name for id in b.cat.unloaded]
+    n = length(unloaded)
+    isempty(unloaded) || (out *= "(The names of " * (n == 1 ? "a package" : "$n packages") *
+        " of the project that " * (n == 1 ? "is" : "are") * " not loaded were not searched: " *
+        "$(join(first(unloaded, 5), ", "))$(n > 5 ? ", …" : ""). " *
+        "To load " * (n == 1 ? "it" : "them") * ", which runs " * (n == 1 ? "its" : "their") * " code, " *
+        (CLI[] ? "add `--load`" : "pass `load=true`") * ".)\n")
+    return out
+end
+
+# Sections of the manuals of the project's packages whose heading, or the title of their page,
+# has every word of `query`, or with `text`, pages whose text has them. As
+# `(address, package, heading, file)`.
+function search_package_manuals(b::Browser, query::AbstractString; text::Bool=false)
+    words = lowercase.(split(query))
+    isempty(words) && return Tuple{String,String,String,String}[]
+    has_all(s) = (l = lowercase(s); all(w -> occursin(w, l), words))
+    out = Tuple{String,String,String,String}[]
+    for m in package_manuals(b), (pg, ref) in zip(m.pages, m.refs)
+        has_all(pg.title) && push!(out, (ref, m.name, pg.title, pg.path))
+        for h in page_headings(b.cat, pg.path)
+            h.text != pg.title && has_all(h.text) &&
+                push!(out, (string(ref, '#', isempty(h.id) ? slugify(h.text) : h.id), m.name, h.text, pg.path))
+        end
+        if text && !any(r -> r[4] == pg.path, out)
+            content = @attempt read(pg.path, String) ""
+            has_all(content) && push!(out, (ref, m.name, pg.title, pg.path))
+        end
+    end
+    return out
 end
 
 """
@@ -245,6 +425,7 @@ The names of module `mod` (a module, or its name), by kind. Each says whether it
 or public, which package it comes from when it is re-exported, and whether it is documented.
 """
 function list_names(mod::Union{Module,AbstractString}; internal::Bool=false, load::Bool=false)
+    FOUND[] = true
     b = headless_browser()
     if !(mod isa Module)
         t = agent_target(b.cat, String(mod), Main)
@@ -254,7 +435,7 @@ function list_names(mod::Union{Module,AbstractString}; internal::Bool=false, loa
             HEADLESS[] = nothing
             return invokelatest(list_names, mod; internal)
         end
-        t isa ModuleTarget || return "$(mod) is not a module.\n"
+        t isa ModuleTarget || (FOUND[] = false; return "$(mod) is not a module.\n")
         mod = t.mod
     end
     io = IOBuffer()
@@ -360,6 +541,10 @@ function link_ref(b::Browser, key, @nospecialize(t))
     if t isa ManualTarget
         # what `show` takes, then the file, which can be read directly
         ref = page_ref(t.path)
+        if ref === nothing
+            pkg = package_page(b, t.path)
+            ref = pkg === nothing ? nothing : pkg[2]
+        end
         ref === nothing && return isempty(t.anchor) ? t.path : string(t.path, '#', t.anchor)
         return string(ref, isempty(t.anchor) ? "" : "#" * t.anchor, "  ", t.path)
     end
@@ -368,6 +553,20 @@ function link_ref(b::Browser, key, @nospecialize(t))
         return ref === nothing ? "§$(t.heading) of this page (section $(t.heading))" : ref
     end
     return nothing
+end
+
+# The column after which the mark of a link goes: after the link, or after the code it is in,
+# so that the code stays as it is written.
+function mark_col(line::AnnotatedString, cols::UnitRange{Int})
+    str = String(line)
+    for a in annotations(line)
+        a.label === :face && a.value === :markdown_inlinecode || continue
+        r = a.region
+        start = textwidth(SubString(str, 1, prevind(str, first(r)))) + 1
+        stop = textwidth(SubString(str, 1, thisind(str, last(r))))
+        start <= last(cols) <= stop && return stop
+    end
+    return last(cols)
 end
 
 # `s` with each text put after the column it goes with.
@@ -396,28 +595,33 @@ const AGENT_USAGE = """
 
     usage: docbrowser <command> [options]     (or: julia -m DocBrowser <command> [options])
 
-      find <words> [--text] [--internal] [--limit N]
-          Names and manual sections that match, one a line, each something `show` takes.
-          `--text` looks in the text of docstrings and the manual too.
+      find <words> [--text] [--internal] [--limit N] [--load]
+          Names, and sections of Julia's manual and of the project's packages' manuals, that
+          match, one a line, each something `show` takes. `--text` looks in the text of
+          docstrings and manuals too, as is done anyway when nothing else matches.
       show <query> [--outline] [--section N] [--brief] [--width N] [--load]
-          The page for a name (`Base.sort!`), a module (`Plots`) or a place in a manual
-          (`manual/arrays#Broadcasting`), as plain text. Links end in a number, listed at the
-          end in a form `show` takes. `--outline` lists the numbered headings of a long page,
-          `--section N` gives one of them, and `--brief` the start of each docstring.
-          `show manual` lists the pages of Julia's manual. `Path:` gives the local file the
-          page comes from, which can be read directly.
+          The page for a name (`Base.sort!`), a module (`Plots`), a page of Julia's manual
+          (`manual/arrays#Broadcasting`) or of a package's (`GLMakie/explanations/figure`),
+          as plain text. Links end in a number, listed at the end in a form `show` takes.
+          `--outline` lists the numbered headings of a long page, and of a package its
+          manual's pages; `--section N` gives one of them, and `--brief` the start of each
+          docstring. `show manual` lists the pages of Julia's manual, and `show GLMakie/`
+          those of a package's. `Path:` gives the local file the page comes from, which can
+          be read directly.
       names <module> [--internal] [--load]
           The names of a module, by kind, and whether each is exported or public.
 
     The project is the one the current directory is in, or the one `--project PATH` names. Its
     packages are not loaded without `--load`, which runs their code; until then their pages show
-    what their source documents, such as the README. Julia's manual is downloaded the first
-    time it is needed.
+    what their source documents, such as the README, and `find` does not know their names.
+    Julia's manual is downloaded the first time it is needed.
+
+    Exit codes: 0 for an answer, 1 when nothing was found, 2 for a mistake in the command.
     """
 
 # The options of each command, and those that take a value.
 const AGENT_OPTIONS = Dict("show" => ["--outline", "--section", "--brief", "--width", "--load"],
-                           "find" => ["--text", "--internal", "--limit"],
+                           "find" => ["--text", "--internal", "--limit", "--load"],
                            "names" => ["--internal", "--load"])
 const VALUE_OPTIONS = ("--section", "--width", "--limit", "--project")
 
@@ -476,12 +680,13 @@ function (@main)(args::Vector{String})
         lookup(query; outline="--outline" in flags, section=number("--section", 0), brief="--brief" in flags,
                width=number("--width", 100), load="--load" in flags)
     elseif cmd == "find"
-        find_docs(query; text="--text" in flags, internal="--internal" in flags, limit=number("--limit", 20))
+        find_docs(query; text="--text" in flags, internal="--internal" in flags, limit=number("--limit", 20),
+                  load="--load" in flags)
     else
         list_names(query; internal="--internal" in flags, load="--load" in flags)
     end
     print(stdout, out)
-    return 0
+    return FOUND[] ? 0 : 1
 end
 
 function usage_error(msg::String)

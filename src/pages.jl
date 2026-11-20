@@ -273,6 +273,9 @@ spans which merely mention a variable do not become links.
 function resolve_ref(text::AbstractString, ctx::Module, cat::Catalog)
     s = strip(text)
     i = findfirst(in("({[ "), s)
+    # A name then a space is a command or an expression, as in `mv a b` or `float = false`,
+    # unless it is a macro and what it is given.
+    i === nothing || s[i] != ' ' || startswith(s, '@') || return nothing
     i === nothing || (s = s[1:prevind(s, i)])
     isempty(s) && return nothing
     parts = split(s, '.')
@@ -533,15 +536,21 @@ List methods `ms` by signature. Each links to its definition.
 # The Markdown of each docstring. Packages add their own ways to format docstrings.
 parse_docs(results::Vector{DocStr}) = Any[dynamic(REPL.parsedoc)(d) for d in results]
 
-# The docstrings of a name, each after a line that says which module it is from when they come
-# from several, as when a package adds a method to a function of Base.
+# The docstrings of a name, set apart: each after a line that says which module it is from when
+# they come from several, as when a package adds a method to a function of Base, or else after
+# a rule.
 function labelled_docs(results::Vector{DocStr})
     docs = parse_docs(results)
+    length(docs) > 1 || return docs
     mods = [get(d.data, :module, nothing) for d in results]
-    length(unique(mods)) > 1 || return docs
+    labels = length(unique(mods)) > 1
     out = Any[]
-    for (m, md) in zip(mods, docs)
-        m isa Module && push!(out, Markdown.MD(Any[Markdown.Paragraph(Any["From ", Markdown.Code(display_name(m)), ":"])]))
+    for (i, (m, md)) in enumerate(zip(mods, docs))
+        if labels && m isa Module
+            push!(out, Markdown.MD(Any[Markdown.Paragraph(Any["From ", Markdown.Code(display_name(m)), ":"])]))
+        elseif i > 1
+            push!(out, Markdown.MD(Any[Markdown.HorizontalRule()]))
+        end
         push!(out, md)
     end
     return out
