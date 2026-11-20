@@ -1108,6 +1108,18 @@ end
     end
     # A build script with no literal list of pages, and a directory other than `src`.
     @test DocBrowser.doc_page_list("makedocs(pages = make_pages())") === nothing
+    # Lists built with `joinpath`, as Makie's are, plain, broadcast over names, or splatted.
+    @test DocBrowser.doc_page_list("""
+        pages = ["Home" => "index.md",
+                 "Blocks" => joinpath.("reference", "blocks", ["axis.md", "label.md"]),
+                 "Explanations" => [joinpath.("explanations", ["a.md"])..., "API" => joinpath("ref", "api.md")]]
+        """) == [("index.md", "Home", ""), ("reference/blocks/axis.md", "", "Blocks"),
+                 ("reference/blocks/label.md", "", "Blocks"), ("explanations/a.md", "", "Explanations"),
+                 ("ref/api.md", "API", "Explanations")]
+    # The tree hash of a directory, from GitHub's listing of its parent, for a downloaded manual.
+    listing = """[{"name":"CairoMakie","path":"CairoMakie","sha":"$('a'^40)","type":"dir","_links":{"self":"x"}},
+                  {"name":"GLMakie","path":"GLMakie","sha":"$('b'^40)","type":"dir","_links":{"self":"y"}}]"""
+    @test DocBrowser.entry_sha(listing, "GLMakie") == 'b'^40 && DocBrowser.entry_sha(listing, "Makie") === nothing
     mktempdir() do dir
         mkpath(joinpath(dir, "docs", "source"))
         write(joinpath(dir, "docs", "make.jl"), "makedocs(source = \"source\", pages = [\"a.md\"])")

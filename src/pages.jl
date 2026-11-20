@@ -981,6 +981,8 @@ function module_page(cat::Catalog, m::Module, width::Int)
         n = length(docs.pages)
         addline!(pb, "  ", ("manual ", :REPL_DocBrowser_dim), (title, nothing, ManualTarget(manual, "")),
                  (n > 1 ? "  $n pages, listed with the names" : "", :REPL_DocBrowser_dim))
+    elseif p !== nothing && !ext && p.role in (:project, :direct, :indirect)
+        add_fetch_line!(pb)
     end
     p === nothing || gap_notice!(pb, docs, online_docs(p.id, dir))
     rule!(pb)
@@ -1206,6 +1208,8 @@ function unloaded_page(cat::Catalog, id::PkgId, width::Int, then::String="")
         n = length(pages)
         addline!(pb, "  ", ("manual ", :REPL_DocBrowser_dim), (pages[1].title, nothing, ManualTarget(pages[1].path, "")),
                  (n > 1 ? "  $n pages, listed with the names" : "", :REPL_DocBrowser_dim))
+    elseif isempty(then) && !stdlib
+        add_fetch_line!(pb)
     end
     rule!(pb)
     what = isempty(then) ? "its docstrings are" : "the docstring of $then is"

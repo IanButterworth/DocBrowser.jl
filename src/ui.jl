@@ -611,7 +611,8 @@ function follow!(b::Browser, t::Target)
         b.link = 0
     elseif t isa ToggleTarget
         t.flag === :tip ? next_tip!(b, 1) : t.flag === :tip_back ? next_tip!(b, -1) :
-            t.flag === :download ? download_manual!(b) : toggle_flag!(b, t.flag)
+            t.flag === :download ? download_manual!(b) : t.flag === :fetch_docs ? fetch_docs!(b) :
+            toggle_flag!(b, t.flag)
     elseif t isa CodeTarget
         n = count(==('\n'), t.code) + 1
         how = COPY[](b, t.code)
@@ -1258,6 +1259,7 @@ function describe_target(b::Browser, p::Page, t)
         t.flag === :tip && return "shows the next tip (t)"
         t.flag === :tip_back && return "shows the previous tip (T)"
         t.flag === :download && return "downloads the manual again"
+        t.flag === :fetch_docs && return "downloads the package's manual from its repository, at the installed version"
         return "finds every method that takes this type; this can take a moment"
     elseif t isa SectionTarget
         return "→ $(getfield(SECTION_TITLES, t.role))"
@@ -3372,6 +3374,35 @@ function download_manual!(b::Browser)
         empty!(b.pages)
         refresh_side!(b)
     end
+end
+
+# Download the manual of the package whose page is shown, which it was installed without.
+function fetch_docs!(b::Browser)
+    key = current_key(b)
+    id, dir = key isa ModuleTarget ? (PkgId(key.mod), pkgdir(key.mod)) :
+              key isa LoadTarget ? (key.id, unloaded_dir(key.id)) : (nothing, nothing)
+    (id === nothing || dir === nothing) && return
+    b.status = "Downloading $(id.name)'s manual from its repository…"
+    downloader()
+    errormonitor(Threads.@spawn begin
+        msg = try
+            fetch_package_docs(id, dir)
+            "Downloaded $(id.name)'s manual"
+        catch err
+            err isa InterruptException && rethrow()
+            "Could not download $(id.name)'s manual: " * first_line(err)
+        end
+        @lock b.lock begin
+            delete!(b.cat.pkgdocs, dir)
+            empty!(b.pages)
+            refresh_side!(b)
+            # the pages of the manual are listed with the package's names
+            refresh_names!(b)
+            b.status = msg
+            b.quit || draw(b)
+        end
+    end)
+    return
 end
 
 # Draw again if the terminal has changed size, or it is time for a card to show.

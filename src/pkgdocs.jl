@@ -26,7 +26,7 @@ function package_docs(cat::Catalog, m::Module)
     (p === nothing || p.role in (:extension, :julia, :main) || parentmodule(m) !== m) && return NO_DOCS
     dir = pkgdir(m)
     dir === nothing && return NO_DOCS
-    return get!(() -> package_docs(dir), cat.pkgdocs, dir)
+    return get!(() -> own_or_fetched_docs(dir), cat.pkgdocs, dir)
 end
 
 function package_docs(dir::String)
@@ -39,9 +39,11 @@ function package_docs(dir::String)
     generator = something(findfirst(g -> occursin(Regex("\\b$g\\b"), text), DOC_GENERATORS), 0)
     generator = generator == 0 ? "" : DOC_GENERATORS[generator]
     listed = Tuple{String,String,String}[] # file, title, group
+    # A build can have helper scripts with short lists of their own, so the longest list is the
+    # manual's.
     for f in scripts
         lists = doc_page_list(read(f, String))
-        lists === nothing || (listed = lists; break)
+        lists === nothing || length(lists) > length(listed) && (listed = lists)
     end
     pages = ManualPage[]
     missing = String[]
@@ -111,19 +113,41 @@ end
 
 function add_doc_pages!(out, list::Expr, group::String)
     for x in list_items(list)
-        if x isa String
-            push!(out, (x, "", group))
+        paths = list_paths(x)
+        if paths !== nothing
+            append!(out, ((p, "", group) for p in paths))
         elseif Meta.isexpr(x, :call, 3) && x.args[1] === :(=>) && x.args[2] isa String
             title, v = x.args[2]::String, x.args[3]
-            if v isa String
-                push!(out, (v, title, group))
-            elseif is_list(v)
-                add_doc_pages!(out, v, title)
+            paths = list_paths(v)
+            if paths === nothing
+                is_list(v) && add_doc_pages!(out, v, title)
+            elseif length(paths) == 1 && !Meta.isexpr(v, :.)
+                push!(out, (paths[1], title, group))
+            else
+                append!(out, ((p, "", title) for p in paths))
             end
         elseif is_list(x)
             add_doc_pages!(out, x, group)
         end
     end
+end
+
+# The files an item of a page list names: a path, or a `joinpath` of literal parts, which a
+# build can apply to a list of names with a dot, and splat into the list around it.
+function list_paths(x)
+    x isa String && return [x]
+    Meta.isexpr(x, :..., 1) && return list_paths(x.args[1])
+    if Meta.isexpr(x, :call) && x.args[1] === :joinpath && length(x.args) > 1 && all(a -> a isa String, x.args[2:end])
+        return [join(x.args[2:end], '/')]
+    end
+    if Meta.isexpr(x, :., 2) && x.args[1] === :joinpath && Meta.isexpr(x.args[2], :tuple)
+        parts = x.args[2].args
+        if !isempty(parts) && all(a -> a isa String, parts[1:end-1]) && is_list(parts[end])
+            names = list_items(parts[end])
+            all(n -> n isa String, names) && return [join([parts[1:end-1]; n], '/') for n in names]
+        end
+    end
+    return nothing
 end
 
 # The package that a page of its manual belongs to, if it is loaded.
@@ -134,6 +158,8 @@ function page_package(cat::Catalog, path::String)
         dir === nothing && continue
         # anywhere under `docs`, since a build can name another directory than `src`
         startswith(path, joinpath(dir, "docs") * Base.Filesystem.path_separator) && return p
+        fetched = fetched_docs_dir(dir)
+        fetched === nothing || startswith(path, joinpath(fetched, "docs") * Base.Filesystem.path_separator) && return p
     end
     return nothing
 end
@@ -248,7 +274,7 @@ end
 # The manual of a package that is not loaded, read from its source.
 function unloaded_docs(cat::Catalog, id::PkgId)
     dir = unloaded_dir(id)
-    return dir === nothing ? NO_DOCS : get!(() -> package_docs(dir), cat.pkgdocs, dir)
+    return dir === nothing ? NO_DOCS : get!(() -> own_or_fetched_docs(dir), cat.pkgdocs, dir)
 end
 
 # The names that the manual of a package that is not loaded lists.
