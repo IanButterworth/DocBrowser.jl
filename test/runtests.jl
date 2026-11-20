@@ -1,6 +1,8 @@
 using Test
 using REPL
 import StyledStrings
+# The browser downloads package manuals by itself when it opens, which tests must not.
+ENV["JULIA_DOCBROWSER_AUTODOWNLOAD"] = "no"
 # Loading the browser should not load Downloads, unless something already has.
 const DOWNLOADS_PRELOADED = haskey(Base.loaded_modules,
     Base.PkgId(Base.UUID("f43a241f-c20a-4ad4-852c-f6b1247861c6"), "Downloads"))
@@ -1108,6 +1110,18 @@ end
     end
     # A build script with no literal list of pages, and a directory other than `src`.
     @test DocBrowser.doc_page_list("makedocs(pages = make_pages())") === nothing
+    # Lists built with `joinpath`, as Makie's are, plain, broadcast over names, or splatted.
+    @test DocBrowser.doc_page_list("""
+        pages = ["Home" => "index.md",
+                 "Blocks" => joinpath.("reference", "blocks", ["axis.md", "label.md"]),
+                 "Explanations" => [joinpath.("explanations", ["a.md"])..., "API" => joinpath("ref", "api.md")]]
+        """) == [("index.md", "Home", ""), ("reference/blocks/axis.md", "", "Blocks"),
+                 ("reference/blocks/label.md", "", "Blocks"), ("explanations/a.md", "", "Explanations"),
+                 ("ref/api.md", "API", "Explanations")]
+    # The tree hash of a directory, from GitHub's listing of its parent, for a downloaded manual.
+    listing = """[{"name":"CairoMakie","path":"CairoMakie","sha":"$('a'^40)","type":"dir","_links":{"self":"x"}},
+                  {"name":"GLMakie","path":"GLMakie","sha":"$('b'^40)","type":"dir","_links":{"self":"y"}}]"""
+    @test DocBrowser.entry_sha(listing, "GLMakie") == 'b'^40 && DocBrowser.entry_sha(listing, "Makie") === nothing
     mktempdir() do dir
         mkpath(joinpath(dir, "docs", "source"))
         write(joinpath(dir, "docs", "make.jl"), "makedocs(source = \"source\", pages = [\"a.md\"])")
@@ -1820,7 +1834,15 @@ end
         @test DocBrowser.docs_url(dir) == "http://docs.p.org/stable"
         write(joinpath(dir, "README.md"), "See the [Julia manual](https://docs.julialang.org/en/v1/).")
         @test DocBrowser.docs_url(dir) === nothing
+        # The package's own `[docs] url` comes first, for the installed version.
+        write(joinpath(dir, "Project.toml"), "version = \"1.2.3\"\n\n[docs]\nurl = \"https://o.github.io/P.jl/v{version}/\"\n")
+        @test DocBrowser.docs_url(dir) == "https://o.github.io/P.jl/v1.2.3/"
+        rm(joinpath(dir, "Project.toml"))
     end
+    # Where the browser looked for a package's docs, and why it found no more.
+    report = sprint(io -> DocBrowser.explain_docs(DocBrowser; io))
+    @test startswith(report, "DocBrowser ") && occursin(r"docs/\s+\d+ pages of a manual", report)
+    @test occursin(r"\[docs\]\s+none in its project file", report) && occursin("hosted docs", report)
     # A standard library in Julia's repository has Julia's licence, and a JLL that of its library.
     pb = DocBrowser.PageBuilder(200)
     DocBrowser.add_links!(pb, Base.PkgId(Markdown), pkgdir(Markdown), :stdlib)
@@ -1966,6 +1988,43 @@ end
     enter = help.keymap_dict['\r']
     DocBrowser.install(repl)
     @test help.keymap_dict['\r'] === enter
+end
+
+@testset "downloaded package manuals" begin
+    depot = mktempdir()
+    pushfirst!(DEPOT_PATH, depot)
+    DocBrowser.RECORDS[] = nothing
+    DocBrowser.ANY_FETCHED[] = nothing
+    try
+        pkg(name) = (dir = joinpath(depot, "packages", name, "abcde"); mkpath(dir);
+                     write(joinpath(dir, "Project.toml"), "name = \"$name\"\nversion = \"1.0.0\"\n"); dir)
+        foo, bar, baz = pkg("Foo"), pkg("Bar"), pkg("Baz")
+        @test DocBrowser.wants_manual(foo) && DocBrowser.fetched_docs_dir(foo) === nothing
+        # A manual downloaded for a package is kept once by its tree hash, and found again in another session.
+        sha = "1"^40
+        src = joinpath(DocBrowser.tree_dir(depot, sha), "docs", "src")
+        mkpath(src)
+        write(joinpath(src, "index.md"), "# Foo\n\nIts manual.\n")
+        DocBrowser.save_records!(Dict("Foo/abcde" => Dict{String,Any}("tree" => sha, "source" => "o/r v1.0.0 docs")))
+        DocBrowser.RECORDS[] = nothing
+        @test DocBrowser.fetched_docs_dir(foo) == DocBrowser.tree_dir(depot, sha) && !DocBrowser.wants_manual(foo)
+        @test length(DocBrowser.own_or_fetched_docs(foo).pages) == 1
+        # One that cannot have a manual is not looked for again; one that failed is, after a day.
+        DocBrowser.save_records!(Dict("Bar/abcde" => Dict{String,Any}("none" => "at the top of its repository"),
+                                      "Baz/abcde" => Dict{String,Any}("failed" => round(Int, time()), "reason" => "x")))
+        @test !DocBrowser.wants_manual(bar) && !DocBrowser.wants_manual(baz)
+        DocBrowser.save_records!(Dict("Baz/abcde" => Dict{String,Any}("failed" => round(Int, time()) - 2 * 86400, "reason" => "x")))
+        @test DocBrowser.wants_manual(baz)
+    finally
+        popfirst!(DEPOT_PATH)
+        DocBrowser.RECORDS[] = nothing
+        DocBrowser.ANY_FETCHED[] = nothing
+    end
+    # While manuals download, the footer says so; the tests turn downloading by itself off.
+    b = test_browser()
+    b.fetch_note = "Downloading the manuals of Foo…"
+    @test occursin("Downloading the manuals of Foo…", strip_ansi(frame(b)[end]))
+    @test !DocBrowser.autodownload_enabled()
 end
 
 foreach((r, v) -> r[] = v, SETTINGS, SAVED)

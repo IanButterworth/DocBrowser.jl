@@ -429,13 +429,20 @@ end
 
 # The blocks of code in `x`, in the order they are shown. Those that show without the face of
 # code, being empty or styled text, are left out.
-function code_nodes!(out::Vector{Markdown.Code}, x)
+function code_nodes!(out::Vector{Markdown.Code}, @nospecialize(x))
     if x isa Markdown.Code
         isempty(x.code) || x.language == "styled" || push!(out, x)
     elseif x isa Markdown.MD || x isa Markdown.Admonition || x isa Markdown.BlockQuote
-        foreach(y -> code_nodes!(out, y), x.content)
+        for y in x.content::Vector{Any}
+            code_nodes!(out, y)
+        end
     elseif x isa Markdown.List
-        foreach(item -> foreach(y -> code_nodes!(out, y), item), x.items)
+        for item in x.items
+            item isa AbstractVector || continue
+            for y in item
+                code_nodes!(out, y)
+            end
+        end
     end
     return out
 end
@@ -823,11 +830,22 @@ const BADGE_PATTERNS = (
 """
     docs_url(dir) -> Union{String, Nothing}
 
-The address of a package's full documentation, taken from the docs badge in its README,
-preferring the stable version over the development one.
+The address of a package's full documentation: the `url` in the `[docs]` section of its project
+file, for its version, or else a link in its README, preferring the stable version over the
+development one.
 """
 function docs_url(dir)
     (dir === nothing || !isdir(dir)) && return nothing
+    # The package's own word for it, in the `[docs]` section of its project file.
+    project = joinpath(dir, "Project.toml")
+    if isfile(project)
+        d = Base.parsed_toml(project)
+        section = get(d, "docs", nothing)
+        url = section isa AbstractDict ? get(section, "url", nothing) : nothing
+        v = get(d, "version", nothing)
+        url isa String && occursin(r"^https?://", url) &&
+            return v isa String ? replace(url, "{version}" => v) : replace(url, "v{version}" => "stable")
+    end
     readme = findfirst(f -> occursin(r"^readme(\.md)?$"i, f), readdir(dir))
     readme === nothing && return nothing
     text = @attempt read(joinpath(dir, readdir(dir)[readme]), String) return nothing
@@ -981,6 +999,8 @@ function module_page(cat::Catalog, m::Module, width::Int)
         n = length(docs.pages)
         addline!(pb, "  ", ("manual ", :REPL_DocBrowser_dim), (title, nothing, ManualTarget(manual, "")),
                  (n > 1 ? "  $n pages, listed with the names" : "", :REPL_DocBrowser_dim))
+    elseif p !== nothing && !ext && p.role in (:project, :direct, :indirect)
+        add_fetch_line!(pb)
     end
     p === nothing || gap_notice!(pb, docs, online_docs(p.id, dir))
     rule!(pb)
@@ -1206,6 +1226,8 @@ function unloaded_page(cat::Catalog, id::PkgId, width::Int, then::String="")
         n = length(pages)
         addline!(pb, "  ", ("manual ", :REPL_DocBrowser_dim), (pages[1].title, nothing, ManualTarget(pages[1].path, "")),
                  (n > 1 ? "  $n pages, listed with the names" : "", :REPL_DocBrowser_dim))
+    elseif isempty(then) && !stdlib
+        add_fetch_line!(pb)
     end
     rule!(pb)
     what = isempty(then) ? "its docstrings are" : "the docstring of $then is"

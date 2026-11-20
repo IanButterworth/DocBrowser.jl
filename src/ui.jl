@@ -141,6 +141,7 @@ mutable struct Browser
     faces::Vector{Pair{Symbol,Face}}
     # the rows of each section of the sidebar, for the catalog and manual they were found in
     sections::Tuple{Any,Any,Dict{Symbol,Vector{SideRow}}}
+    fetch_note::String # what is being downloaded in the background, for the footer
 end
 
 function Browser(term::REPL.Terminals.TextTerminal, cat::Catalog=Catalog())
@@ -155,7 +156,7 @@ function Browser(term::REPL.Terminals.TextTerminal, cat::Catalog=Catalog())
                 nothing, false, (0.0, 0.0, 0.0, 0.0), nothing, ManualHit[], 0, NameEntry[], Tuple{String,PkgId}[], SEARCH_INDIRECT[], 0, (0, 0), Inf, nothing,
                 tip_order(), 1, false, nothing, nothing, "", nothing, nothing, "", Base.get_world_counter(),
                 0, "", terminal_theme(), nothing, browser_faces(terminal_theme(), nothing),
-                (nothing, nothing, Dict{Symbol,Vector{SideRow}}()))
+                (nothing, nothing, Dict{Symbol,Vector{SideRow}}()), "")
     any(p -> p.role in (:project, :direct), cat.pkgs) || push!(b.expanded, :indirect)
     refresh_side!(b)
     b.side.cursor = 1 # the start page
@@ -611,7 +612,8 @@ function follow!(b::Browser, t::Target)
         b.link = 0
     elseif t isa ToggleTarget
         t.flag === :tip ? next_tip!(b, 1) : t.flag === :tip_back ? next_tip!(b, -1) :
-            t.flag === :download ? download_manual!(b) : toggle_flag!(b, t.flag)
+            t.flag === :download ? download_manual!(b) : t.flag === :fetch_docs ? fetch_docs!(b) :
+            toggle_flag!(b, t.flag)
     elseif t isa CodeTarget
         n = count(==('\n'), t.code) + 1
         how = COPY[](b, t.code)
@@ -1258,6 +1260,8 @@ function describe_target(b::Browser, p::Page, t)
         t.flag === :tip && return "shows the next tip (t)"
         t.flag === :tip_back && return "shows the previous tip (T)"
         t.flag === :download && return "downloads the manual again"
+        t.flag === :fetch_docs &&
+            return "downloads the package's manual from its repository, at the installed version · DocBrowser.explain_docs says where the browser looked"
         return "finds every method that takes this type; this can take a moment"
     elseif t isa SectionTarget
         return "→ $(getfield(SECTION_TITLES, t.role))"
@@ -1275,6 +1279,7 @@ function footer_message(b::Browser)
         d = describe(b, (:spot, b.link))
         d === nothing || return d
     end
+    isempty(b.fetch_note) || return b.fetch_note
     return FIRST_OPEN[] ? TIP : ""
 end
 
@@ -3347,6 +3352,7 @@ end
 
 function run_here!(b::Browser)
     !Base.generating_output() && !any(p -> p.role === :manual, b.cat.manual) && download_manual!(b)
+    autodownload!(b)
     run_screen!(b)
 end
 
@@ -3372,6 +3378,79 @@ function download_manual!(b::Browser)
         empty!(b.pages)
         refresh_side!(b)
     end
+end
+
+# Download the manual of the package whose page is shown, which it was installed without.
+function fetch_docs!(b::Browser)
+    key = current_key(b)
+    id, dir = key isa ModuleTarget ? (PkgId(key.mod), pkgdir(key.mod)) :
+              key isa LoadTarget ? (key.id, unloaded_dir(key.id)) : (nothing, nothing)
+    (id === nothing || dir === nothing) && return
+    b.status = "Downloading $(id.name)'s manual from its repository…"
+    downloader()
+    errormonitor(Threads.@spawn begin
+        msg = try
+            fetch_package_docs(id, dir)
+            "Downloaded $(id.name)'s manual"
+        catch err
+            err isa InterruptException && rethrow()
+            "Could not download $(id.name)'s manual: " * first_line(err) *
+                " · DocBrowser.explain_docs(\"$(id.name)\"; online=true) says more"
+        end
+        manuals_changed!(b; status=msg)
+    end)
+    return
+end
+
+# Show the manuals that have been downloaded since the pages were made.
+function manuals_changed!(b::Browser; status::Union{Nothing,String}=nothing, note::Union{Nothing,String}=nothing)
+    @lock b.lock begin
+        empty!(b.cat.pkgdocs)
+        b.cat.docs_dirs = (0, Tuple{String,PkgEntry}[])
+        empty!(b.pages)
+        refresh_side!(b)
+        # the pages of a package's manual are listed with its names
+        refresh_names!(b)
+        status === nothing || (b.status = status)
+        note === nothing || (b.fetch_note = note)
+        b.quit || draw(b)
+    end
+    return
+end
+
+# Download, in the background, the manuals of the packages the browser lists that are installed
+# without them, saying so in the footer. It never stands in the way: what fails is tried again
+# another day, and `explain_docs` says why.
+function autodownload!(b::Browser)
+    (autodownload_enabled() && !Base.generating_output()) || return
+    @lock DOWNLOAD_LOCK (AUTODOWNLOADING[] && return; AUTODOWNLOADING[] = true)
+    pkgs, unloaded = @lock b.lock (copy(b.cat.pkgs), copy(b.cat.unloaded))
+    task = Threads.@spawn try
+        # Working out what to download loads Pkg, which can hold up the browser for a moment,
+        # so that waits for a pause in the typing.
+        while time() - LAST_INPUT[] < 1.0 && !b.quit
+            sleep(0.25)
+        end
+        wanted = packages_wanting_manuals(pkgs, unloaded)
+        isempty(wanted) && return
+        # said once it is known which of them have a manual to look for
+        names = Ref("")
+        start(ns) = (names[] = join(first(ns, 3), ", ") * (length(ns) > 3 ? " and $(length(ns) - 3) more" : "");
+                     manuals_changed!(b; note="Downloading the manuals of $(names[])…"))
+        progress(done, total) = done < total &&
+            manuals_changed!(b; note="Downloading the manuals of $(names[]) ($done of $total repositories)…")
+        got = fetch_manuals(wanted; start, progress)
+        manuals_changed!(b; note="", status=got == 0 ? nothing :
+            "Downloaded the manuals of $got package$(got == 1 ? "" : "s")")
+    catch err
+        err isa InterruptException && rethrow()
+        @debug "Downloading manuals failed" exception=(err, catch_backtrace())
+        @lock b.lock (b.fetch_note = "")
+    finally
+        @lock DOWNLOAD_LOCK AUTODOWNLOADING[] = false
+    end
+    @lock DOWNLOAD_LOCK AUTODOWNLOAD[] = task
+    return
 end
 
 # Draw again if the terminal has changed size, or it is time for a card to show.
@@ -3407,6 +3486,7 @@ function run_screen!(b::Browser)
                 err isa EOFError || rethrow()
                 break
             end
+            LAST_INPUT[] = time()
             ev === nothing && continue
             @lock b.lock begin
                 changed = try

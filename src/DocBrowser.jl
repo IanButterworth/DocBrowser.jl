@@ -15,6 +15,7 @@ import InteractiveUtils
 using Base64: base64encode
 
 export browse
+public fetch_package_docs, explain_docs
 
 # The defaults use only the 16 named colours, so they follow the terminal's palette and
 # work on any terminal, light or dark. Each pairing keeps a WCAG contrast of at least 4.5:1
@@ -170,6 +171,7 @@ include("pages.jl")
 include("manual.jl")
 include("pkgdocs.jl")
 include("download.jl")
+include("fetchdocs.jl")
 include("start.jl")
 include("input.jl")
 include("ui.jl")
