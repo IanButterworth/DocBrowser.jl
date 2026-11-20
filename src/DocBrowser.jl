@@ -3,6 +3,11 @@
 
 A full-window, mouse-aware browser for Julia's manual and the documentation of every loaded
 module. Press Enter at an empty `help?>` prompt to open it, or call [`DocBrowser.browse`](@ref).
+
+The same pages are available as plain text, for programs and AI agents:
+[`DocBrowser.find_docs`](@ref) searches, [`DocBrowser.lookup`](@ref) shows a page, and
+[`DocBrowser.list_names`](@ref) lists the names of a module. From a shell, the `docbrowser` app
+(`pkg> app add`) and `julia -m DocBrowser` do the same; `docbrowser --help` says how.
 """
 module DocBrowser
 
@@ -15,7 +20,7 @@ import InteractiveUtils
 using Base64: base64encode
 
 export browse
-public fetch_package_docs, explain_docs
+public fetch_package_docs, explain_docs, lookup, find_docs, list_names
 
 # The defaults use only the 16 named colours, so they follow the terminal's palette and
 # work on any terminal, light or dark. Each pairing keeps a WCAG contrast of at least 4.5:1
@@ -176,6 +181,7 @@ include("start.jl")
 include("input.jl")
 include("ui.jl")
 include("repl.jl")
+include("agent.jl")
 # Without this workload the first open takes about 2 s in every session, nearly all of it
 # type inference, which the JIT object cache does not keep. It costs about 11 MiB.
 include("precompile.jl")

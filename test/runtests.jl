@@ -2027,4 +2027,35 @@ end
     @test !DocBrowser.autodownload_enabled()
 end
 
+@testset "plain text for agents" begin
+    # A page, with its links numbered and listed in a form that lookup takes again.
+    page = DocBrowser.lookup("Fixture.documented")
+    @test startswith(page, "# Main.Fixture.documented") && occursin("Calls documented_public[1]", page)
+    @test occursin("[1] Main.Fixture.documented_public", page)
+    @test occursin("Public but not exported", DocBrowser.lookup("Main.Fixture.documented_public"))
+    @test occursin("Nothing is called", DocBrowser.lookup("Fixture.nosuchname"))
+    # An example keeps its short lines, which have only the place that copies the code.
+    @test occursin("    julia> 1 + 1\n    2\n", DocBrowser.lookup("Shape"))
+    # The outline of a manual page, and one of its sections.
+    outline = DocBrowser.lookup("manual/arrays"; outline=true)
+    k = findfirst(l -> endswith(l, " Broadcasting"), split(outline, '\n')) - 1
+    section = DocBrowser.lookup("manual/arrays"; section=k)
+    @test occursin("element-by-element", section) && !occursin("Array literals\n", section)
+    @test DocBrowser.lookup("manual/arrays#Broadcasting") == section
+    # Searching, and the names of a module.
+    @test occursin("Base.sort!  function, exported", DocBrowser.find_docs("sort!"))
+    names = DocBrowser.list_names(Fixture)
+    @test occursin("documented  exported", names) && !occursin("helper", names)
+    @test occursin("helper  internal", DocBrowser.list_names("Fixture"; internal=true))
+    # The command line.
+    out = mktemp() do path, io
+        code = redirect_stdout(() -> DocBrowser.main(["--section", "1", "show", "Base.sort!"]), io)
+        close(io)
+        (code, read(path, String))
+    end
+    @test out[1] == 0 && startswith(out[2], "# Base.sort!")
+    @test redirect_stderr(() -> DocBrowser.main(String[]), devnull) == 1
+    @test redirect_stdout(() -> DocBrowser.main(["--help"]), devnull) == 0
+end
+
 foreach((r, v) -> r[] = v, SETTINGS, SAVED)

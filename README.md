@@ -117,6 +117,40 @@ browser looked and why it found no more.
   by itself. The button on a package's page still does.
 - `GITHUB_TOKEN`: raises GitHub's limit on the requests that finding those manuals makes.
 
+## For AI agents
+
+The pages are also available as plain text, so that coding agents can read the documentation
+of the exact package versions a project uses, offline, instead of searching the web. Install
+the `docbrowser` command with Pkg's (experimental) app support, and put `~/.julia/bin` on your
+`PATH`:
+
+```
+pkg> app add https://github.com/IanButterworth/DocBrowser.jl
+```
+
+```
+docbrowser find sort                         # names and manual sections that match
+docbrowser show Base.sort!                   # a page, with its links numbered
+docbrowser show manual/arrays --outline      # the headings of a long page...
+docbrowser show manual/arrays --section 21   # ...and one of them
+docbrowser names Plots --load                # the names of a module
+```
+
+It works in the project of the current directory, or the one `--project PATH` names. It does
+not load the project's packages unless asked to with `--load`, since that runs their code. Without
+the app, `julia --project -m DocBrowser ...` does the same in an environment that has DocBrowser,
+and in Julia `DocBrowser.find_docs`, `DocBrowser.lookup` and `DocBrowser.list_names` return the
+same text.
+
+To tell an agent about it, add a line to your project's `AGENTS.md` or `CLAUDE.md`, such as:
+
+```
+For Julia documentation, run `docbrowser find <words>` and `docbrowser show <name>`
+(see `docbrowser --help`) before searching the web.
+```
+
+or install the skill in [`skills/julia-docs`](skills/julia-docs/SKILL.md), which says more.
+
 ## How it hooks into the REPL
 
 Julia has no hook for this yet, so on loading, the package changes the running REPL's help mode:
